@@ -1,0 +1,144 @@
+---
+title: SQL Functions Overview
+description: Complete reference of SQL functions available in QuestDB
+---
+
+QuestDB provides a comprehensive set of SQL functions organized by category. All functions are implemented in zero-GC Java for high performance.
+
+## Function Categories
+
+### Date and Time Functions
+
+Manipulate timestamps, dates, and time intervals. QuestDB supports microsecond and nanosecond precision.
+
+[View Date/Time Functions](/api/functions/date-time)
+
+**Key functions:**
+- `now()` - Current timestamp
+- `date_trunc()` - Truncate timestamp to specified unit
+- `year()`, `month()`, `day()` - Extract date parts
+- `timestamp_floor()` - Floor timestamp to interval
+- `dateadd()` - Add interval to timestamp
+
+### Aggregation Functions
+
+Compute aggregate values across rows in GROUP BY queries.
+
+[View Aggregation Functions](/api/functions/aggregation)
+
+**Key functions:**
+- `count()` - Count rows
+- `sum()`, `avg()` - Sum and average
+- `min()`, `max()` - Minimum and maximum
+- `stddev()`, `variance()` - Statistical functions
+- `string_agg()` - Concatenate strings
+
+### String Functions
+
+Manipulate string, varchar, and symbol types.
+
+[View String Functions](/api/functions/string)
+
+**Key functions:**
+- `concat()` - Concatenate values
+- `length()` - String length
+- `upper()`, `lower()` - Case conversion
+- `substring()` - Extract substring
+- `replace()` - Replace text
+
+### Numeric Functions
+
+Mathematical operations and transformations.
+
+[View Numeric Functions](/api/functions/numeric)
+
+**Key functions:**
+- `abs()`, `sign()` - Absolute value and sign
+- `round()`, `ceil()`, `floor()` - Rounding
+- `sqrt()`, `pow()` - Power functions
+- `sin()`, `cos()`, `tan()` - Trigonometry
+
+### Finance Functions
+
+Specialized functions for orderbook and market data analysis.
+
+[View Finance Functions](/api/functions/finance)
+
+**Key functions:**
+- `mid()` - Mid price calculation
+- `spread()` - Bid-ask spread
+- `vwap()` - Volume-weighted average price
+- `twap()` - Time-weighted average price
+
+## Function Signatures
+
+Function signatures in QuestDB use type notation:
+
+- `D` - DOUBLE
+- `I` - INT
+- `L` - LONG
+- `S` - STRING
+- `N` - TIMESTAMP (any precision)
+- `V` - Variable arguments
+- `s` - STRING constant
+
+### Example
+
+```sql
+round(DI)
+```
+
+This signature means `round()` takes a DOUBLE and an INT parameter.
+
+## NULL Handling
+
+Most functions return `NULL` when any input is `NULL`. Exceptions are documented in individual function references.
+
+## Performance Considerations
+
+### SIMD Acceleration
+
+Many aggregation functions use SIMD instructions for vectorized computation:
+- `sum()`, `avg()`, `min()`, `max()`
+- Statistical functions like `stddev()`, `variance()`
+
+### Constant Folding
+
+The query optimizer evaluates constant expressions at compile time:
+
+```sql
+-- Evaluated once at compile time
+SELECT * FROM trades WHERE price > 100.0 * 1.05;
+
+-- Evaluated for each row
+SELECT * FROM trades WHERE price > base_price * 1.05;
+```
+
+### Runtime Constants
+
+Functions like `now()` are evaluated once per query execution, not per row:
+
+```sql
+-- now() called once, not for each row
+SELECT * FROM trades WHERE timestamp > now() - INTERVAL '1' HOUR;
+```
+
+## Type Casting
+
+QuestDB supports explicit type casting with `::` syntax:
+
+```sql
+SELECT 
+    '123'::INT,
+    456::STRING,
+    '2024-01-01'::TIMESTAMP
+FROM trades;
+```
+
+Many functions perform implicit casting when safe.
+
+## See Also
+
+- [SQL Language Reference](/reference/sql/)
+- [Data Types](/reference/datatypes/)
+- [Operators](/reference/operators/)

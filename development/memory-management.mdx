@@ -1,0 +1,689 @@
+---
+title: Memory Management
+description: QuestDB's zero-GC memory management, covering off-heap allocation, memory tagging, leak detection, and memory-mapped files.
+---
+
+## Overview
+
+QuestDB's zero-GC design relies on careful memory management to avoid garbage collection on data paths. This document covers the strategies and implementations used to achieve this goal.
+
+## Core Principles
+
+### 1. No Allocations on Hot Paths
+
+Query execution and data ingestion must not trigger garbage collection:
+- **Pre-allocate buffers** — Reuse existing objects from pools
+- **Use off-heap memory** — Native memory not managed by JVM GC
+- **Stack allocation** — Prefer primitive types and local variables
+- **Object pooling** — Reuse expensive objects
+
+### 2. Two Memory Regions
+
+QuestDB manages two distinct memory regions:
+
+**On-heap (JVM heap):**
+- Configuration objects
+- Connection state
+- Small temporary objects
+- Managed by JVM GC (minor collections only)
+
+**Off-heap (native memory):**
+- Column data (memory-mapped files)
+- Indexes
+- Sort buffers
+- Group-by hash tables
+- Managed manually with `malloc()`/`free()`
+
+### 3. Memory Tagging
+
+All off-heap allocations are tagged with a purpose for tracking and debugging.
+
+## Off-Heap Memory Management
+
+### Unsafe Class
+
+**Location:** `core/src/main/java/io/questdb/std/Unsafe.java:40`
+
+Wrapper around `sun.misc.Unsafe` for direct memory access.
+
+**Key methods:**
+
+```java
+public final class Unsafe {
+    // Allocate native memory
+    public static long malloc(long size, int memoryTag);
+    
+    // Reallocate (resize) native memory
+    public static long realloc(long ptr, long oldSize, long newSize, int memoryTag);
+    
+    // Free native memory
+    public static void free(long ptr, long size, int memoryTag);
+    
+    // Memory operations
+    public static void getUnsafe().putByte(long address, byte value);
+    public static byte getUnsafe().getByte(long address);
+    public static void getUnsafe().putLong(long address, long value);
+    public static long getUnsafe().getLong(long address);
+    
+    // Bulk operations
+    public static void getUnsafe().copyMemory(long src, long dst, long bytes);
+    public static void getUnsafe().setMemory(long address, long bytes, byte value);
+}
+```
+
+**Example usage:**
+```java
+// Allocate 1MB for temporary buffer
+long ptr = Unsafe.malloc(1024 * 1024, MemoryTag.NATIVE_DEFAULT);
+try {
+    // Use memory
+    Unsafe.getUnsafe().putLong(ptr, 12345L);
+    long value = Unsafe.getUnsafe().getLong(ptr);
+} finally {
+    // Always free in finally block
+    Unsafe.free(ptr, 1024 * 1024, MemoryTag.NATIVE_DEFAULT);
+}
+```
+
+**Critical:** Always pair `malloc()` with `free()`, typically in try-finally blocks.
+
+### Memory Tags
+
+**Location:** `core/src/main/java/io/questdb/std/MemoryTag.java`
+
+Enum identifying the purpose of each allocation:
+
+```java
+public final class MemoryTag {
+    public static final int NATIVE_DEFAULT = 0;
+    public static final int NATIVE_RECORD = 1;
+    public static final int NATIVE_FUNC_RSS = 2;
+    public static final int NATIVE_FILTER = 3;
+    public static final int NATIVE_JOIN_MAP = 4;
+    public static final int NATIVE_TREE_CHAIN = 5;
+    public static final int MMAP_DEFAULT = 6;
+    public static final int MMAP_INDEX_READER = 7;
+    public static final int MMAP_TABLE_READER = 8;
+    // ... many more tags
+}
+```
+
+**Benefits:**
+- **Debugging:** Identify where memory leaks occur
+- **Monitoring:** Track memory usage per component
+- **Limits:** Set per-tag memory limits
+
+**Metrics:** Memory usage per tag exposed via JMX and HTTP `/metrics` endpoint.
+
+### Memory Tracking
+
+QuestDB tracks all off-heap allocations:
+
+```java
+public static long malloc(long size, int memoryTag) {
+    long ptr = UNSAFE.allocateMemory(size);
+    if (ptr == 0) {
+        throw new OutOfMemoryError("Failed to allocate " + size + " bytes");
+    }
+    // Record allocation
+    COUNTERS[memoryTag].add(size);
+    recordMalloc(size, memoryTag);
+    return ptr;
+}
+
+public static void free(long ptr, long size, int memoryTag) {
+    UNSAFE.freeMemory(ptr);
+    // Record deallocation
+    COUNTERS[memoryTag].add(-size);
+    recordFree(size, memoryTag);
+}
+```
+
+**Tracking counters:**
+- `MALLOC_COUNT_ADDR` — Total allocations
+- `FREE_COUNT_ADDR` — Total deallocations
+- `RSS_MEM_USED_ADDR` — Resident Set Size (physical memory used)
+- `NON_RSS_MEM_USED_ADDR` — Virtual memory used
+
+**Leak detection:** On shutdown, verify all memory freed (`malloc count == free count`).
+
+## Memory-Mapped Files
+
+### Overview
+
+Column data accessed via `mmap()` (OS-level memory mapping):
+- **Lazy loading:** OS loads pages on demand (no need to read entire file)
+- **Page cache:** OS caches frequently accessed pages
+- **Zero-copy:** Data read directly from kernel page cache
+- **Shared memory:** Multiple processes can map same file
+
+**Use cases:**
+- Reading column data
+- Writing column data (append mode)
+- Reading indexes
+
+### Memory API Hierarchy
+
+**Location:** `core/src/main/java/io/questdb/cairo/vm/api/`
+
+Hierarchy of memory interfaces:
+
+```
+Memory (base)
+  ├── MemoryR (readable)
+  │     └── MemoryCR (contiguous readable)
+  │           └── MemoryCMR (contiguous memory-mapped readable)
+  └── MemoryA (appendable)
+        └── MemoryMA (memory-mapped appendable)
+              └── MemoryMAR (memory-mapped appendable readable)
+```
+
+**Naming convention:**
+- `C` — Contiguous (single memory region)
+- `M` — Memory-mapped
+- `A` — Appendable
+- `R` — Readable
+- `W` — Writable
+
+**Example:** `MemoryCMARW` — Contiguous, Memory-mapped, Appendable, Readable, Writable
+
+### Key Interfaces
+
+#### MemoryR
+
+**Location:** `core/src/main/java/io/questdb/cairo/vm/api/MemoryR.java`
+
+Readable memory interface:
+
+```java
+public interface MemoryR {
+    byte getByte(long offset);
+    short getShort(long offset);
+    int getInt(long offset);
+    long getLong(long offset);
+    double getDouble(long offset);
+    void getLong256(long offset, Long256 dst);
+    
+    long size();
+    long pageIndex(long offset);  // Which page contains offset?
+}
+```
+
+**Usage:** Read column data from disk.
+
+#### MemoryA
+
+**Location:** `core/src/main/java/io/questdb/cairo/vm/api/MemoryA.java`
+
+Appendable memory interface:
+
+```java
+public interface MemoryA {
+    void putByte(byte value);
+    void putShort(short value);
+    void putInt(int value);
+    void putLong(long value);
+    void putDouble(double value);
+    
+    long getAppendOffset();  // Current append position
+    void skip(long bytes);   // Skip bytes (leaves garbage)
+}
+```
+
+**Usage:** Append data to column files.
+
+#### MemoryMARW
+
+**Location:** `core/src/main/java/io/questdb/cairo/vm/api/MemoryMARW.java`
+
+Memory-mapped file with read, write, and append support.
+
+```java
+public interface MemoryMARW extends MemoryMAR, MemoryARW {
+    void putByte(long offset, byte value);
+    void putInt(long offset, int value);
+    void putLong(long offset, long value);
+    
+    void truncate();  // Truncate file to append offset
+}
+```
+
+**Usage:** Read and write column files.
+
+### Implementations
+
+#### MemoryCMRImpl
+
+**Location:** `core/src/main/java/io/questdb/cairo/vm/MemoryCMRImpl.java`
+
+Memory-mapped read-only file.
+
+**Features:**
+- Single contiguous memory region
+- Grows automatically as file grows
+- Used for reading column data
+
+**Example:**
+```java
+try (MemoryCMR mem = new MemoryCMRImpl()) {
+    mem.of(ff, path, size, MemoryTag.MMAP_TABLE_READER);
+    long value = mem.getLong(0);  // Read first 8 bytes
+}
+```
+
+#### MemoryCARWImpl
+
+**Location:** `core/src/main/java/io/questdb/cairo/vm/MemoryCARWImpl.java`
+
+Contiguous appendable read-write memory.
+
+**Features:**
+- Append mode (grow file)
+- Random access (read/write at any offset)
+- Used for writing column data
+
+**Example:**
+```java
+try (MemoryCARW mem = new MemoryCARWImpl()) {
+    mem.of(ff, path, pageSize, size, MemoryTag.MMAP_TABLE_WRITER);
+    mem.putLong(12345L);  // Append 8 bytes
+    mem.putByte(offset, (byte) 42);  // Write at specific offset
+}
+```
+
+#### MemoryPARWImpl
+
+**Location:** `core/src/main/java/io/questdb/cairo/vm/MemoryPARWImpl.java`
+
+Paged appendable read-write memory.
+
+**Features:**
+- Multiple memory-mapped pages (not contiguous)
+- Grows by adding new pages
+- Used for temporary buffers
+
+**Advantages:**
+- Avoids large contiguous allocations
+- Grows efficiently (add page vs. remap entire file)
+
+### Memory-Mapped File Lifecycle
+
+1. **Open file:**
+```java
+mem.of(filesFacade, path, pageSize, size, memoryTag);
+```
+
+2. **Map file to memory:**
+```java
+long addr = Files.mmap(fd, size, offset, Files.MAP_RO);
+```
+
+3. **Access memory:**
+```java
+long value = Unsafe.getUnsafe().getLong(addr + offset);
+```
+
+4. **Unmap and close:**
+```java
+Files.munmap(addr, size);
+Files.close(fd);
+```
+
+**See:** `core/src/main/java/io/questdb/cairo/vm/Vm.java`
+
+## Object Pooling
+
+### Why Pool Objects?
+
+Expensive objects reused instead of allocated:
+- `TableReader` — Expensive to open (maps files)
+- `TableWriter` — Expensive to open (locks table)
+- `SqlCompiler` — Contains many data structures
+- `DirectByteCharSequence` — Wraps off-heap memory
+
+### Pool Implementations
+
+#### ReaderPool
+
+**Location:** `core/src/main/java/io/questdb/cairo/pool/ReaderPool.java`
+
+Pools `TableReader` instances:
+
+```java
+public class ReaderPool extends AbstractMultiTenantPool<TableReader> {
+    public TableReader get(TableToken tableToken) {
+        return get(tableToken.getDirName());
+    }
+    
+    @Override
+    protected TableReader newInstance(TableToken tableToken) {
+        return new TableReader(configuration, tableToken);
+    }
+}
+```
+
+**Usage:**
+```java
+try (TableReader reader = readerPool.get(tableToken)) {
+    // Use reader
+} // Automatically returned to pool
+```
+
+**Benefits:**
+- Avoid opening/closing files repeatedly
+- Share readers across queries
+- Automatic cleanup on close
+
+#### WriterPool
+
+**Location:** `core/src/main/java/io/questdb/cairo/pool/WriterPool.java`
+
+Pools `TableWriter` instances (max 1 per table):
+
+```java
+public class WriterPool extends AbstractMultiTenantPool<TableWriter> {
+    public TableWriter get(TableToken tableToken, String lockReason) {
+        // Only one writer per table at a time
+        TableWriter writer = get(tableToken.getDirName());
+        if (writer == null) {
+            throw EntryLockedException.instance(lockReason);
+        }
+        return writer;
+    }
+}
+```
+
+**Usage:**
+```java
+try (TableWriter writer = writerPool.get(tableToken, "insert")) {
+    // Write data
+} // Automatically returned to pool
+```
+
+**Benefits:**
+- Serialize writes (single writer per table)
+- Keep writer open between operations (amortize open cost)
+
+#### SqlCompilerPool
+
+**Location:** `core/src/main/java/io/questdb/cairo/pool/SqlCompilerPool.java`
+
+Pools `SqlCompiler` instances:
+
+```java
+try (SqlCompiler compiler = engine.getSqlCompiler()) {
+    CompiledQuery cq = compiler.compile(sql, context);
+    // Execute query
+}
+```
+
+**Benefits:**
+- Avoid allocating parser data structures
+- Reuse function caches
+
+### Pool Supervision
+
+**ResourcePoolSupervisor** monitors pool health:
+- Tracks pool size
+- Removes stale entries
+- Enforces limits
+
+**See:** `core/src/main/java/io/questdb/cairo/pool/ResourcePoolSupervisor.java`
+
+## Zero-Allocation Collections
+
+**Location:** `core/src/main/java/io/questdb/std/`
+
+Custom collections that avoid allocations:
+
+### ObjList
+
+Replacement for `ArrayList`:
+
+```java
+public class ObjList<T> implements Mutable, Closeable {
+    private T[] buffer;
+    private int size;
+    
+    public void add(T item) {
+        if (size == buffer.length) {
+            resize();  // Grow array
+        }
+        buffer[size++] = item;
+    }
+    
+    public T get(int index) {
+        return buffer[index];
+    }
+    
+    public void clear() {
+        Arrays.fill(buffer, 0, size, null);  // Clear references
+        size = 0;
+    }
+}
+```
+
+**Benefits:**
+- Reusable (call `clear()` instead of `new ArrayList()`)
+- Direct array access (no iterator allocation)
+- Closeable (can close contained objects)
+
+### CharSequenceIntHashMap
+
+Replacement for `HashMap<String, Integer>`:
+
+```java
+public class CharSequenceIntHashMap implements Mutable {
+    private CharSequence[] keys;
+    private int[] values;
+    
+    public void put(CharSequence key, int value) {
+        // Open addressing hash table
+    }
+    
+    public int get(CharSequence key) {
+        // Lookup
+    }
+}
+```
+
+**Benefits:**
+- No `Integer` boxing (stores primitive `int`)
+- Accepts `CharSequence` (no `String` creation required)
+- Reusable (call `clear()` instead of `new HashMap()`)
+
+### LongList
+
+Replacement for `ArrayList<Long>`:
+
+```java
+public class LongList implements Mutable {
+    private long[] buffer;
+    private int size;
+    
+    public void add(long value) { /* ... */ }
+    public long get(int index) { return buffer[index]; }
+}
+```
+
+**Benefits:**
+- No `Long` boxing
+- Direct array access
+- Reusable
+
+### DirectUtf8Sequence
+
+Wrapper around off-heap UTF-8 string:
+
+```java
+public class DirectUtf8Sequence implements Utf8Sequence {
+    private long ptr;  // Native memory address
+    private int size;  // Byte size
+    
+    @Override
+    public byte byteAt(int index) {
+        return Unsafe.getUnsafe().getByte(ptr + index);
+    }
+}
+```
+
+**Benefits:**
+- No string copy (points directly to memory-mapped file)
+- Zero-allocation substring (adjust `ptr` and `size`)
+- Implements `Utf8Sequence` (works with QuestDB string functions)
+
+## Leak Detection
+
+### Memory Leak Tests
+
+All tests wrapped in `assertMemoryLeak()`:
+
+```java
+@Test
+public void testTableWriter() throws Exception {
+    assertMemoryLeak(() -> {
+        // Your test code
+    });
+}
+```
+
+**What it does:**
+1. Record memory state before test
+2. Run test
+3. Verify all allocated memory was freed
+4. Fail test if leak detected
+
+**See:** `io/questdb/test/AbstractTest.java`
+
+### Leak Detection Mechanism
+
+```java
+public static void assertMemoryLeak(LeakProneCode code) throws Exception {
+    long memUsedBefore = Unsafe.getMemUsed();
+    long mallocCountBefore = Unsafe.getMallocCount();
+    long freeCountBefore = Unsafe.getFreeCount();
+    
+    try {
+        code.run();
+    } finally {
+        long memUsedAfter = Unsafe.getMemUsed();
+        long mallocCountAfter = Unsafe.getMallocCount();
+        long freeCountAfter = Unsafe.getFreeCount();
+        
+        Assert.assertEquals("Memory leak detected", memUsedBefore, memUsedAfter);
+        Assert.assertEquals("Unmatched malloc/free", 
+            mallocCountBefore + mallocCountAfter,
+            freeCountBefore + freeCountAfter
+        );
+    }
+}
+```
+
+**Benefits:**
+- Catch leaks early (during development)
+- Pinpoint leak location (test that fails)
+- Prevent leaks from reaching production
+
+### Manual Leak Investigation
+
+If a leak is suspected:
+
+1. **Check metrics:** Monitor memory usage per tag via `/metrics`
+2. **Enable tracking:** Set `cairo.debug.mem.leak.threshold=0` to track all allocations
+3. **Dump allocations:** On leak, QuestDB dumps allocation stack traces
+4. **Analyze:** Identify unfreed allocations
+
+## Best Practices
+
+### 1. Always Pair malloc/free
+
+```java
+// Good
+long ptr = Unsafe.malloc(size, tag);
+try {
+    // Use memory
+} finally {
+    Unsafe.free(ptr, size, tag);
+}
+
+// Bad - leak if exception thrown
+long ptr = Unsafe.malloc(size, tag);
+// Use memory
+Unsafe.free(ptr, size, tag);
+```
+
+### 2. Use Closeable Resources
+
+```java
+// Good
+try (TableWriter writer = engine.getWriter(tableToken, "insert")) {
+    // Write data
+} // Automatically closed
+
+// Bad - leak if exception thrown
+TableWriter writer = engine.getWriter(tableToken, "insert");
+// Write data
+writer.close();
+```
+
+### 3. Clear Collections, Don't Recreate
+
+```java
+// Good (zero allocation)
+ObjList<String> list = new ObjList<>();
+for (int i = 0; i < 1000; i++) {
+    list.add(data[i]);
+    process(list);
+    list.clear();  // Reuse
+}
+
+// Bad (1000 allocations)
+for (int i = 0; i < 1000; i++) {
+    ObjList<String> list = new ObjList<>();
+    list.add(data[i]);
+    process(list);
+}
+```
+
+### 4. Use Direct ByteBuffers for Network I/O
+
+```java
+// Good (zero-copy)
+ByteBuffer buffer = ByteBuffer.allocateDirect(4096);
+while (channel.read(buffer) > 0) {
+    buffer.flip();
+    // Process buffer
+    buffer.clear();
+}
+
+// Bad (heap allocation + copy)
+ByteBuffer buffer = ByteBuffer.allocate(4096);
+while (channel.read(buffer) > 0) {
+    // JVM copies buffer to/from heap
+}
+```
+
+### 5. Avoid String Concatenation
+
+```java
+// Good
+StringSink sink = new StringSink();
+for (int i = 0; i < 1000; i++) {
+    sink.clear();
+    sink.put("Value: ").put(i);
+    // Use sink
+}
+
+// Bad (many String allocations)
+for (int i = 0; i < 1000; i++) {
+    String str = "Value: " + i;  // Allocates
+    // Use str
+}
+```
+
+## Related Pages
+
+- [Storage Engine](/development/storage-engine) — Memory-mapped file usage
+- [SIMD Optimizations](/development/simd-optimization) — Native memory operations
+- [Architecture Overview](/development/architecture) — System architecture
+- [Testing](/development/testing) — Memory leak testing

@@ -1,0 +1,140 @@
+---
+title: Java client
+description: QuestDB Java client for high-performance data ingestion
+---
+
+The QuestDB Java client provides a high-performance API for ingesting data using the InfluxDB Line Protocol.
+
+## Installation
+
+<CodeGroup>
+```xml Maven
+<dependency>
+    <groupId>org.questdb</groupId>
+    <artifactId>questdb</artifactId>
+    <version>9.3.3</version>
+</dependency>
+```
+
+```groovy Gradle
+implementation 'org.questdb:questdb:9.3.3'
+```
+</CodeGroup>
+
+## Quick start
+
+```java
+import io.questdb.client.Sender;
+import java.time.Instant;
+
+public class Example {
+    public static void main(String[] args) {
+        try (Sender sender = Sender.builder()
+                .address("localhost:9009")
+                .build()) {
+            
+            sender.table("trades")
+                .symbol("symbol", "ETH-USD")
+                .symbol("side", "sell")
+                .doubleColumn("price", 2615.54)
+                .doubleColumn("amount", 0.00044)
+                .atNow();
+            
+            sender.flush();
+        }
+    }
+}
+```
+
+## Configuration
+
+```java
+Sender sender = Sender.builder()
+    .address("localhost:9009")
+    .enableAuth("admin")
+    .authToken("your-token")
+    .bufferCapacity(128 * 1024)  // 128KB
+    .build();
+```
+
+### Builder options
+
+<ParamField path="address" type="string" required>
+  Server address in format `host:port`
+</ParamField>
+
+<ParamField path="bufferCapacity" type="int">
+  Buffer size in bytes (default: 64KB)
+</ParamField>
+
+<ParamField path="enableAuth" type="string">
+  Enable authentication with key ID
+</ParamField>
+
+<ParamField path="authToken" type="string">
+  Authentication token (private key)
+</ParamField>
+
+## Data types
+
+```java
+sender.table("sensors")
+    .symbol("location", "warehouse-1")           // Symbol
+    .longColumn("sensor_id", 12345)              // Long
+    .doubleColumn("temperature", 23.5)           // Double
+    .stringColumn("status", "active")            // String
+    .booleanColumn("is_online", true)            // Boolean
+    .timestampColumn("timestamp", Instant.now()) // Timestamp
+    .atNow();  // Use server timestamp
+```
+
+## Best practices
+
+<Tip>
+Use try-with-resources to ensure proper cleanup of sender resources.
+</Tip>
+
+```java
+try (Sender sender = Sender.builder().address("localhost:9009").build()) {
+    // Batch multiple rows
+    for (int i = 0; i < 1000; i++) {
+        sender.table("metrics")
+            .symbol("host", "server-" + i)
+            .doubleColumn("cpu", Math.random() * 100)
+            .atNow();
+    }
+    sender.flush();
+}
+```
+
+## Error handling
+
+```java
+try (Sender sender = Sender.builder().address("localhost:9009").build()) {
+    sender.table("trades")
+        .symbol("symbol", "BTC-USD")
+        .doubleColumn("price", 50000.0)
+        .atNow();
+    sender.flush();
+} catch (Exception e) {
+    System.err.println("Failed to send data: " + e.getMessage());
+}
+```
+
+## Performance tips
+
+1. **Batch rows**: Send multiple rows before calling `flush()`
+2. **Reuse sender**: Create once, use for entire application lifecycle
+3. **Use symbols**: Convert low-cardinality strings to symbols
+4. **Async flush**: Consider implementing async flushing for higher throughput
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="ILP Reference" icon="book" href="/api/ilp/overview">
+    Learn more about the protocol
+  </Card>
+  <Card title="Examples" icon="code" href="https://github.com/questdb/questdb-quickstart">
+    Browse code examples
+  </Card>
+</CardGroup>

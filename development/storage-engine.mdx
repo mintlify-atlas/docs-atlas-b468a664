@@ -1,0 +1,500 @@
+---
+title: Cairo Storage Engine
+description: Deep dive into QuestDB's Cairo storage engine, covering column-oriented storage, partitioning, indexing, and Write-Ahead Log.
+---
+
+## Overview
+
+Cairo is QuestDB's columnar storage engine, designed for high-performance time-series data. Named after the Egyptian city, Cairo provides the foundation for QuestDB's speed and efficiency.
+
+**Location:** `core/src/main/java/io/questdb/cairo/`
+
+## Core Concepts
+
+### Column-Oriented Storage
+
+Data is stored by column rather than by row:
+
+```
+Traditional (row-oriented):
+Row 1: [ts=T1, symbol=AAPL, price=150.0, volume=1000]
+Row 2: [ts=T2, symbol=GOOGL, price=2800.0, volume=500]
+
+Cairo (column-oriented):
+ts column:     [T1, T2, ...]
+symbol column: [AAPL, GOOGL, ...]
+price column:  [150.0, 2800.0, ...]
+volume column: [1000, 500, ...]
+```
+
+**Benefits:**
+- **Efficient scans:** Read only the columns you need
+- **Better compression:** Similar values stored together compress better
+- **Vectorization:** Process multiple values simultaneously with SIMD
+- **Cache efficiency:** Sequential reads fit in CPU cache
+
+**Implementation:** Each column is a separate file on disk, memory-mapped for fast access.
+
+### Time-Based Partitioning
+
+Tables are automatically partitioned by timestamp:
+
+```
+trades/
+├── 2024-01-01/      # Daily partition
+│   ├── ts.d        # Timestamp column data
+│   ├── symbol.d    # Symbol column data
+│   ├── symbol.k    # Symbol keys
+│   ├── symbol.v    # Symbol values
+│   ├── price.d     # Price column data
+│   └── volume.d    # Volume column data
+├── 2024-01-02/
+├── 2024-01-03/
+├── _meta           # Table metadata
+└── _txn            # Transaction metadata
+```
+
+**Partition granularity:**
+- `NONE` — No partitioning (single partition)
+- `DAY` — Daily partitions (recommended for most use cases)
+- `MONTH` — Monthly partitions
+- `YEAR` — Yearly partitions
+- `HOUR` — Hourly partitions (high-frequency data)
+
+**Benefits:**
+- **Fast time-range queries:** Skip entire partitions outside the range
+- **Efficient data management:** Drop old partitions in O(1) time
+- **Parallel processing:** Process multiple partitions concurrently
+
+**See:** `io/questdb/cairo/PartitionBy.java`
+
+## Key Classes
+
+### CairoEngine
+
+**Location:** `io/questdb/cairo/CairoEngine.java:1`
+
+The storage engine core. Manages:
+- Table lifecycle (create, drop, rename)
+- Reader/writer pools
+- WAL coordination
+- Schema changes
+- Background jobs
+
+**Key methods:**
+- `getReader()` — Acquires a table reader from the pool
+- `getWriter()` — Acquires a table writer from the pool
+- `getTableToken()` — Resolves table name to token
+- `removeTableReader()` / `removeTableWriter()` — Closes and removes tables
+
+### TableWriter
+
+**Location:** `io/questdb/cairo/TableWriter.java:1`
+
+Writes data to tables. Supports:
+- In-order appends (most common)
+- Out-of-order (O3) data handling
+- Column addition/removal
+- Index building
+- Partition management
+
+**Key methods:**
+- `newRow(timestamp)` — Begins a new row
+- `putInt()`, `putDouble()`, `putStr()`, etc. — Set column values
+- `append()` — Commits the row
+- `commit()` — Makes rows visible to readers
+- `addColumn()` — Adds a new column to the table
+
+**Example usage:**
+```java
+try (TableWriter writer = engine.getWriter(tableToken, "test")) {
+    TableWriter.Row row = writer.newRow(timestamp);
+    row.putSym(0, "AAPL");
+    row.putDouble(1, 150.0);
+    row.putInt(2, 1000);
+    row.append();
+    writer.commit();
+}
+```
+
+### TableReader
+
+**Location:** `io/questdb/cairo/TableReader.java:61`
+
+Reads data from tables. Provides:
+- Partition iteration
+- Column access
+- Snapshot consistency (MVCC)
+- Symbol table lookups
+
+**Key methods:**
+- `openPartition(index)` — Opens a partition for reading
+- `getColumn(index)` — Returns memory-mapped column data
+- `getSymbolMapReader(index)` — Returns symbol table reader
+- `reload()` — Reloads to see new transactions
+- `size()` — Total row count across all partitions
+
+**Example usage:**
+```java
+try (TableReader reader = engine.getReader(tableToken)) {
+    long rowCount = reader.size();
+    for (int partitionIndex = 0; partitionIndex < reader.getPartitionCount(); partitionIndex++) {
+        reader.openPartition(partitionIndex);
+        long partitionRowCount = reader.getPartitionRowCount(partitionIndex);
+        // Read column data via memory-mapped files
+    }
+}
+```
+
+### ColumnVersionReader
+
+**Location:** `io/questdb/cairo/ColumnVersionReader.java`
+
+Tracks column schema versions across partitions. Handles:
+- Column additions
+- Column type changes (in WAL tables)
+- Column renames
+
+Each partition can have a different column layout due to schema evolution.
+
+## File Format
+
+### Column Data Files
+
+Column files store raw data in native binary format:
+
+**Naming:** `<column_name>.d` (e.g., `price.d`, `ts.d`)
+
+**Fixed-width types:** Stored as binary arrays
+- `INT`: 4 bytes per value
+- `LONG`: 8 bytes per value
+- `DOUBLE`: 8 bytes per value
+- `TIMESTAMP`: 8 bytes per value (microseconds since epoch)
+- `BOOLEAN`: 1 byte per value
+
+**Variable-width types:** Two files per column
+- `<column>.d` — Actual string data (UTF-8 or UTF-16)
+- `<column>.i` — Index file (8-byte offsets into `.d` file)
+
+### Symbol Files
+
+Symbols (string interning) use three files:
+
+- `<column>.d` — Integer keys (4 bytes each)
+- `<column>.k` — Symbol keys (unique string list)
+- `<column>.v` — Symbol values (offset index for `.k`)
+
+**Example:**
+```
+symbol.k: ["AAPL", "GOOGL", "MSFT"]
+symbol.v: [0, 5, 11]  # byte offsets
+symbol.d: [0, 1, 0, 2, 0]  # integer keys
+```
+
+Row 0: key=0 → "AAPL"
+Row 1: key=1 → "GOOGL"
+Row 2: key=0 → "AAPL"
+Row 3: key=2 → "MSFT"
+Row 4: key=0 → "AAPL"
+
+**Benefits:**
+- Reduces storage (4 bytes vs. full string)
+- Faster comparisons (integer equality)
+- Better compression
+
+**See:** `io/questdb/cairo/SymbolMapReader.java`, `io/questdb/cairo/SymbolMapWriter.java`
+
+### Metadata Files
+
+**`_meta`** — Table metadata (one per table):
+- Table ID
+- Column definitions (name, type, indexed, symbol)
+- Designated timestamp column
+- Partition granularity
+- Table version
+
+**`_txn`** — Transaction metadata (one per table):
+- Current transaction ID
+- Row count
+- Partition metadata (boundaries, counts)
+- Attached partition list
+
+**See:** `io/questdb/cairo/TableUtils.java`
+
+## Indexing
+
+### Bitmap Indexes
+
+QuestDB uses bitmap indexes for low-cardinality columns (especially symbols).
+
+**Structure:**
+- One bitmap per distinct value
+- Bitmap: bit array where bit `i` = 1 if row `i` has that value
+
+**Files:**
+- `<column>.k` — Index keys (unique values)
+- `<column>.v` — Index value offsets
+
+**Example:**
+```
+Table: symbol=["A", "B", "A", "C", "A", "B"]
+
+Bitmap for "A": [1, 0, 1, 0, 1, 0]
+Bitmap for "B": [0, 1, 0, 0, 0, 1]
+Bitmap for "C": [0, 0, 0, 1, 0, 0]
+```
+
+Query `WHERE symbol = 'A'` → return rows [0, 2, 4]
+
+Query `WHERE symbol IN ('A', 'B')` → OR the bitmaps → [1, 1, 1, 0, 1, 1] → rows [0, 1, 2, 4, 5]
+
+**Benefits:**
+- Fast lookups for equality queries
+- Efficient set operations (AND, OR, NOT)
+- Small memory footprint (compressed bitmaps)
+
+**See:** `io/questdb/cairo/BitmapIndexReader.java`, `io/questdb/cairo/BitmapIndexWriter.java`, `core/src/main/c/share/bitmap_index_utils.cpp`
+
+### Column Indexer Task
+
+Indexes are built asynchronously by `ColumnIndexerTask`:
+
+1. Writer appends data without indexes
+2. Writer commits transaction
+3. Background job picks up indexing task
+4. Indexes built concurrently with new writes
+
+**See:** `io/questdb/tasks/ColumnIndexerTask.java`
+
+## Write-Ahead Log (WAL)
+
+### Overview
+
+WAL provides:
+- Higher ingestion throughput (multiple writers)
+- Durability (writes persisted before acknowledgment)
+- Schema flexibility (columns can be added out-of-order)
+
+**Location:** `core/src/main/java/io/questdb/cairo/wal/`
+
+### WAL Architecture
+
+**Components:**
+
+1. **WalWriter** — Writes data to WAL segments: `io/questdb/cairo/wal/WalWriter.java`
+2. **TableSequencer** — Coordinates multiple writers: `io/questdb/cairo/wal/seq/TableSequencer.java`
+3. **ApplyWal2TableJob** — Applies WAL to table: `io/questdb/cairo/wal/ApplyWal2TableJob.java`
+
+**Flow:**
+
+```
+ILP Client → WalWriter → WAL Segment (disk)
+                  ↓
+            TableSequencer (coordinates)
+                  ↓
+          ApplyWal2TableJob (background)
+                  ↓
+             TableWriter → Table Data
+```
+
+### WAL Structure
+
+```
+trades.d/              # WAL directory
+├── 0/                 # Segment 0
+│   ├── ts.d
+│   ├── symbol.d
+│   └── _meta
+├── 1/                 # Segment 1
+├── _seq/              # Sequencer metadata
+└── _txnlog            # Transaction log
+```
+
+**Segments:** Fixed-size append-only files. When full, roll to next segment.
+
+**See:** `io/questdb/cairo/wal/WalUtils.java`
+
+### Enabling WAL
+
+```sql
+CREATE TABLE trades (
+    ts TIMESTAMP,
+    symbol SYMBOL,
+    price DOUBLE,
+    volume INT
+) timestamp(ts) PARTITION BY DAY WAL;
+```
+
+The `WAL` keyword enables WAL for the table.
+
+**Default:** Non-WAL tables (single writer, direct writes)
+
+## Out-of-Order (O3) Data
+
+### Problem
+
+Time-series data often arrives out-of-order:
+- Network delays
+- Multiple data sources
+- Late-arriving events
+
+### Solution
+
+QuestDB's O3 algorithm handles out-of-order data efficiently:
+
+1. **Buffer:** Collect O3 data in memory
+2. **Sort:** Sort by designated timestamp
+3. **Merge:** Merge sorted O3 data with existing partitions
+4. **Commit:** Make merged data visible
+
+**Key classes:**
+- `TableWriter` handles O3 commits: `io/questdb/cairo/TableWriter.java`
+- `O3PartitionTask` merges data: `io/questdb/tasks/O3PartitionTask.java`
+- Native code for sorting: `core/src/main/c/share/ooo.cpp`
+
+**Configuration:**
+- `cairo.max.uncommitted.rows` — Buffer size before commit
+- `cairo.o3.max.lag` — Maximum lag allowed for O3 data
+
+**See:** `core/src/main/c/share/ooo.cpp`, `core/src/main/c/share/ooo_dispatch.cpp`
+
+## Memory-Mapped Files
+
+### Overview
+
+Column data accessed via `mmap()` (OS-level file mapping):
+- OS handles paging (load pages on demand)
+- Efficient for large datasets (don't need to fit in RAM)
+- Zero-copy reads (data read directly from page cache)
+
+### Memory API
+
+**Location:** `core/src/main/java/io/questdb/cairo/vm/api/`
+
+**Hierarchy:**
+- `Memory` — Base interface
+- `MemoryR` — Readable memory
+- `MemoryA` — Appendable memory
+- `MemoryMA` — Memory-mapped appendable
+- `MemoryMR` — Memory-mapped readable
+- `MemoryCR` — Contiguous readable
+- `MemoryARW` — Appendable read-write
+
+**Implementations:**
+- `MemoryCMRImpl` — Memory-mapped read-only
+- `MemoryCARWImpl` — Contiguous read-write
+- `MemoryPARWImpl` — Paged read-write
+
+**See:** `io/questdb/cairo/vm/api/`, `io/questdb/cairo/vm/Vm.java`
+
+### Memory Management
+
+See [Memory Management](/development/memory-management) for details on:
+- Off-heap allocation
+- Memory tagging and tracking
+- Leak detection
+
+## Transactions and MVCC
+
+### Transaction Model
+
+**Single writer per table:** At most one `TableWriter` at a time.
+
+**Multiple readers:** Any number of `TableReader` instances concurrently.
+
+**Snapshot isolation:** Readers see a consistent snapshot of the table (no dirty reads).
+
+### Transaction Metadata
+
+The `_txn` file tracks:
+- `txn` — Transaction ID (incremented on each commit)
+- `transientRowCount` — Total rows
+- `fixedRowCount` — Rows in completed partitions
+- `minTimestamp`, `maxTimestamp` — Time range
+- `dataVersion` — Partition version
+
+**See:** `io/questdb/cairo/TxReader.java`, `io/questdb/cairo/TxWriter.java`
+
+### TxnScoreboard
+
+Tracks active reader transactions to prevent premature file deletion.
+
+**Location:** `io/questdb/cairo/TxnScoreboard.java`
+
+When a writer commits:
+1. Update `_txn` file with new transaction ID
+2. Notify `TxnScoreboard`
+3. Readers reload to see new transaction
+4. Old files kept until all readers release them
+
+## Table Lifecycle
+
+### Table Creation
+
+```java
+try (TableWriter writer = engine.getWriter(tableToken, "test")) {
+    // Table now exists on disk
+}
+```
+
+**Files created:**
+- `<table>/_meta` — Metadata
+- `<table>/_txn` — Transaction file
+- `<table>/<partition>/` — First partition (if partitioned)
+
+### Schema Evolution
+
+QuestDB supports schema changes on live tables:
+
+**Adding columns:**
+```sql
+ALTER TABLE trades ADD COLUMN exchange SYMBOL;
+```
+
+Old partitions: column doesn't exist (returns NULL)
+New partitions: column exists
+
+**Column versions** track schema changes across partitions.
+
+**See:** `io/questdb/cairo/ColumnVersionReader.java`
+
+### Table Deletion
+
+```sql
+DROP TABLE trades;
+```
+
+Deletes all files:
+- Metadata files
+- Partition directories
+- WAL segments (if WAL-enabled)
+
+## Performance Considerations
+
+### Partition Size
+
+- **Too small:** Overhead from many files
+- **Too large:** Queries scan unnecessary data
+
+**Recommendation:** Daily partitions for most use cases (10M-100M rows/day)
+
+### Symbol Cardinality
+
+- **Low cardinality (`<1000`):** Use SYMBOL type
+- **High cardinality (`>100K`):** Use STRING type
+
+**Why:** Symbols build indexes, which grow with cardinality. High-cardinality symbols waste memory and slow down inserts.
+
+### Column Count
+
+- **Wide tables (`>100` columns):** More memory-mapped files, slower opens
+- **Narrow tables (`<50` columns):** Optimal performance
+
+**Recommendation:** Normalize data or split into multiple tables if >100 columns.
+
+## Related Pages
+
+- [SQL Compiler](/development/sql-compiler) — Query execution over Cairo
+- [SIMD Optimizations](/development/simd-optimization) — Vector operations on columns
+- [Memory Management](/development/memory-management) — Off-heap allocation
+- [Architecture Overview](/development/architecture) — System architecture

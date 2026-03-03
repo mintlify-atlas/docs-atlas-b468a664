@@ -1,0 +1,605 @@
+---
+title: Monitoring and Observability
+description: Metrics collection, logging, health checks, and performance monitoring
+---
+
+## Overview
+
+QuestDB provides comprehensive monitoring through:
+
+1. **Prometheus Metrics**: Detailed operational metrics
+2. **Health Check Endpoints**: HTTP endpoints for liveness/readiness probes
+3. **Logging**: Structured application logs
+4. **Telemetry**: Anonymous usage statistics
+5. **Query Tracing**: Execution plan analysis
+
+## Prometheus Metrics
+
+### Enable Metrics
+
+```properties
+# server.conf
+metrics.enabled=true
+```
+
+Metrics are exposed at:
+- **Endpoint**: `http://localhost:9000/metrics`
+- **Format**: Prometheus text format
+
+### Key Metrics
+
+#### System Metrics
+
+```promql
+# Memory usage by tag
+questdb_memory_tag_NATIVE_DEFAULT
+questdb_memory_tag_NATIVE_O3
+questdb_memory_tag_NATIVE_MMAP
+
+# JVM heap usage
+questdb_memory_jvm_heap_used
+questdb_memory_jvm_heap_committed
+
+# Native memory
+questdb_memory_malloc_count
+questdb_memory_free_count
+```
+
+#### Connection Metrics
+
+```promql
+# Active connections by protocol
+questdb_connections_active{protocol="http"}
+questdb_connections_active{protocol="pg"}
+questdb_connections_active{protocol="ilp"}
+
+# Connection lifecycle
+questdb_connections_opened_total
+questdb_connections_closed_total
+```
+
+#### Query Metrics
+
+```promql
+# Query execution count
+questdb_queries_total{type="select"}
+questdb_queries_total{type="insert"}
+questdb_queries_total{type="update"}
+
+# Query errors
+questdb_query_error_counter
+
+# Query cache
+questdb_query_cache_hits
+questdb_query_cache_misses
+```
+
+#### Write Metrics
+
+```promql
+# Rows written
+questdb_rows_written_total
+
+# WAL metrics
+questdb_wal_segments_total
+questdb_wal_apply_lag_seconds
+
+# Commit operations
+questdb_commits_total
+questdb_commit_duration_seconds
+```
+
+#### Table Metrics
+
+```promql
+# Table reader/writer counts
+questdb_table_readers_active
+questdb_table_writers_active
+
+# Reader leaks (memory leaks)
+questdb_reader_leak_counter
+```
+
+#### Health Metrics
+
+```promql
+# Unhandled errors (should be 0)
+questdb_unhandled_errors
+
+# Query errors
+questdb_query_error_counter
+```
+
+### Prometheus Configuration
+
+**prometheus.yml**:
+```yaml
+scrape_configs:
+  - job_name: 'questdb'
+    scrape_interval: 15s
+    static_configs:
+      - targets: ['localhost:9000']
+    metrics_path: '/metrics'
+```
+
+## Health Check Endpoints
+
+### HTTP Health Check
+
+**Standard endpoint**:
+```bash
+# Basic health check
+curl http://localhost:9000/
+# Response: OK (HTTP 200)
+```
+
+**Query-based health check**:
+```bash
+# Execute simple query
+curl -G http://localhost:9000/exec \
+  --data-urlencode "query=SELECT 1"
+```
+
+### HTTP MIN Server
+
+Dedicated minimal health check endpoint (doesn't log requests):
+
+```properties
+# server.conf
+http.min.enabled=true
+http.min.net.bind.to=0.0.0.0:9003
+```
+
+```bash
+# Health check without logging
+curl http://localhost:9003/
+# Response: OK (HTTP 200)
+```
+
+**Pessimistic health check**:
+```properties
+# Return 500 if any unhandled errors occurred
+http.pessimistic.health.check.enabled=true
+```
+
+### Kubernetes Probes
+
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: questdb
+spec:
+  containers:
+  - name: questdb
+    image: questdb/questdb:latest
+    ports:
+    - containerPort: 9000
+    - containerPort: 9003
+    livenessProbe:
+      httpGet:
+        path: /
+        port: 9003
+      initialDelaySeconds: 30
+      periodSeconds: 10
+      timeoutSeconds: 5
+      failureThreshold: 3
+    readinessProbe:
+      httpGet:
+        path: /
+        port: 9003
+      initialDelaySeconds: 10
+      periodSeconds: 5
+      timeoutSeconds: 3
+      failureThreshold: 3
+```
+
+## Logging
+
+### Log Configuration
+
+```properties
+# server.conf
+
+# Enable query execution logging
+log.sql.query.progress.exe=true
+```
+
+### Log Files
+
+Logs are written to `<root>/log/`:
+
+```
+log/
+├── stdout-2024-03-01.txt    # Application logs
+├── stdout-2024-03-02.txt
+└── questdb.log              # Symlink to latest
+```
+
+### Log Format
+
+```
+2024-03-01T10:15:30.123Z I i.q.ServerMain started [version=7.3.0, commit=abc123]
+2024-03-01T10:15:31.456Z I i.q.c.h.HttpServer listening on 0.0.0.0:9000
+2024-03-01T10:16:00.789Z I i.q.g.SqlCompiler [exe] SELECT * FROM trades
+```
+
+**Log Levels**:
+- `I`: Info
+- `W`: Warning
+- `E`: Error
+- `C`: Critical
+
+### JVM Logging
+
+Enable verbose JVM logging:
+
+```bash
+java -Xlog:gc*:file=gc.log:time,level,tags \
+  -p questdb.jar -m io.questdb/io.questdb.ServerMain
+```
+
+### Log Rotation
+
+QuestDB rotates logs daily. Configure external log rotation:
+
+**/etc/logrotate.d/questdb**:
+```
+/var/lib/questdb/log/*.txt {
+    daily
+    rotate 30
+    compress
+    delaycompress
+    notifempty
+    create 0644 questdb questdb
+    sharedscripts
+    postrotate
+        /usr/bin/killall -USR1 questdb || true
+    endscript
+}
+```
+
+## Query Tracing
+
+### Enable Tracing
+
+```properties
+# server.conf
+query.tracing.enabled=true
+```
+
+### Trace Query Execution
+
+```sql
+-- Enable tracing for session
+SET query.trace = true;
+
+-- Execute query
+SELECT symbol, avg(price)
+FROM trades
+WHERE timestamp > dateadd('d', -1, now())
+GROUP BY symbol;
+
+-- View execution plan
+EXPLAIN SELECT symbol, avg(price)
+FROM trades
+WHERE timestamp > dateadd('d', -1, now())
+GROUP BY symbol;
+```
+
+### Query Execution Logs
+
+With `log.sql.query.progress.exe=true`, QuestDB logs:
+
+```
+[exe] SELECT symbol, avg(price) FROM trades WHERE ... [cached=false, time=123ms]
+```
+
+## Performance Monitoring
+
+### System Metrics
+
+**Monitor CPU usage**:
+```bash
+# Overall CPU
+top -b -n 1 | grep questdb
+
+# Per-thread CPU
+top -H -p $(pgrep -f questdb)
+```
+
+**Monitor memory**:
+```bash
+# Process memory
+ps aux | grep questdb
+
+# Native memory tracking (requires JVM flag)
+jcmd $(pgrep -f questdb) VM.native_memory summary
+```
+
+**Monitor disk I/O**:
+```bash
+# IOPS and throughput
+iostat -x 5
+
+# Per-process I/O
+sudo iotop -p $(pgrep -f questdb)
+```
+
+### QuestDB System Tables
+
+**Table metadata**:
+```sql
+-- List all tables with partition info
+SELECT * FROM tables();
+
+-- Column information
+SELECT * FROM table_columns('trades');
+
+-- Partition details
+SELECT * FROM table_partitions('trades');
+```
+
+**WAL status**:
+```sql
+-- WAL table status
+SELECT * FROM wal_tables();
+
+-- Active transactions
+SELECT * FROM wal_transactions();
+```
+
+**Query statistics** (requires tracing):
+```sql
+SELECT * FROM query_activity();
+```
+
+### Connection Monitoring
+
+```sql
+-- Current connections (system table)
+SELECT * FROM sys.connections;
+
+-- Connection history
+SELECT * FROM sys.connection_log;
+```
+
+## Telemetry
+
+### Configuration
+
+```properties
+# server.conf
+
+# Enable anonymous telemetry
+telemetry.enabled=true
+
+# Queue capacity for telemetry events
+telemetry.queue.capacity=512
+
+# Hide telemetry tables from user queries
+telemetry.hide.tables=true
+
+# Retention period
+telemetry.table.ttl.weeks=4
+```
+
+### Telemetry Data
+
+View telemetry events:
+
+```sql
+-- All telemetry events
+SELECT * FROM telemetry;
+
+-- Grouped by event type
+SELECT event, count(*)
+FROM telemetry
+GROUP BY event;
+```
+
+**Event types**:
+- `DB_START`: Server startup
+- `DB_STOP`: Server shutdown
+- `TABLE_CREATE`: Table creation
+- `QUERY_EXEC`: Query execution
+
+## Alerting
+
+### Prometheus Alerting Rules
+
+**alerts.yml**:
+```yaml
+groups:
+  - name: questdb
+    interval: 30s
+    rules:
+      # High error rate
+      - alert: QuestDBHighErrorRate
+        expr: rate(questdb_query_error_counter[5m]) > 10
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: High query error rate
+          description: "{{ $value }} errors per second"
+
+      # Memory leak detection
+      - alert: QuestDBReaderLeak
+        expr: increase(questdb_reader_leak_counter[10m]) > 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: Table reader leak detected
+          description: Readers not properly closed
+
+      # WAL lag
+      - alert: QuestDBWALLag
+        expr: questdb_wal_apply_lag_seconds > 300
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: WAL apply lag high
+          description: "{{ $value }} seconds behind"
+
+      # Connection limit
+      - alert: QuestDBHighConnections
+        expr: questdb_connections_active{protocol="http"} > 200
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: High connection count
+          description: "{{ $value }} active connections"
+
+      # Unhandled errors
+      - alert: QuestDBUnhandledErrors
+        expr: increase(questdb_unhandled_errors[5m]) > 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: Unhandled errors detected
+          description: Critical errors in QuestDB
+```
+
+### Monitoring Dashboard
+
+**Grafana Dashboard JSON**:
+
+```json
+{
+  "dashboard": {
+    "title": "QuestDB Monitoring",
+    "panels": [
+      {
+        "title": "Query Rate",
+        "targets": [
+          {
+            "expr": "rate(questdb_queries_total[5m])"
+          }
+        ]
+      },
+      {
+        "title": "Write Throughput",
+        "targets": [
+          {
+            "expr": "rate(questdb_rows_written_total[5m])"
+          }
+        ]
+      },
+      {
+        "title": "Active Connections",
+        "targets": [
+          {
+            "expr": "questdb_connections_active"
+          }
+        ]
+      },
+      {
+        "title": "Memory Usage",
+        "targets": [
+          {
+            "expr": "questdb_memory_jvm_heap_used"
+          },
+          {
+            "expr": "sum(questdb_memory_tag_NATIVE_DEFAULT)"
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+## Custom Monitoring Scripts
+
+### Monitor Query Performance
+
+```bash
+#!/bin/bash
+# monitor_queries.sh
+
+while true; do
+  curl -s -G http://localhost:9000/exec \
+    --data-urlencode "query=SELECT count(*) FROM trades WHERE timestamp > dateadd('m', -1, now())" \
+    | jq -r '.timings.compiler + .timings.count' \
+    | awk '{print "Query time: " $1 "ms"}'
+  sleep 60
+done
+```
+
+### Monitor WAL Lag
+
+```bash
+#!/bin/bash
+# monitor_wal_lag.sh
+
+curl -s http://localhost:9000/metrics | \
+  grep questdb_wal_apply_lag_seconds | \
+  awk '{print "WAL lag: " $2 " seconds"}'
+```
+
+### Monitor Disk Space
+
+```bash
+#!/bin/bash
+# monitor_disk.sh
+
+DB_DIR="/var/lib/questdb/db"
+THRESHOLD=80
+
+USAGE=$(df "$DB_DIR" | tail -1 | awk '{print $5}' | sed 's/%//')
+
+if [ "$USAGE" -gt "$THRESHOLD" ]; then
+  echo "ALERT: Disk usage at ${USAGE}%"
+  # Send alert
+  curl -X POST https://alerts.example.com/webhook \
+    -d "Disk usage: ${USAGE}%"
+fi
+```
+
+## Best Practices
+
+1. **Enable Metrics**: Always run with `metrics.enabled=true` in production
+2. **Health Checks**: Use HTTP MIN endpoint for Kubernetes probes
+3. **Log Retention**: Rotate logs to prevent disk exhaustion
+4. **Alert Thresholds**: Set alerts based on baseline metrics
+5. **Dashboard**: Create Grafana dashboard for real-time visibility
+6. **Query Tracing**: Enable temporarily for debugging, disable in production
+7. **Monitor Leaks**: Alert on non-zero `reader_leak_counter`
+8. **WAL Lag**: Keep below 60 seconds for real-time applications
+9. **Telemetry**: Review periodically for usage patterns
+10. **Baseline**: Establish performance baseline during testing
+
+## Troubleshooting
+
+### High Memory Usage
+
+1. Check memory metrics by tag
+2. Look for reader leaks
+3. Verify symbol cache settings
+4. Review page frame sizes
+
+### Slow Queries
+
+1. Enable query tracing
+2. Use EXPLAIN to analyze plan
+3. Check for missing indexes
+4. Review parallel execution settings
+
+### Connection Issues
+
+1. Check active connection count
+2. Verify connection limits
+3. Review timeout settings
+4. Monitor network errors
+
+### WAL Apply Lag
+
+1. Check WAL writer worker count
+2. Verify disk I/O performance
+3. Review commit interval settings
+4. Monitor WAL segment sizes

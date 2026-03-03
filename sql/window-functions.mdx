@@ -1,0 +1,563 @@
+---
+title: Window Functions
+description: Window functions for time-series analysis and analytical calculations.
+---
+
+Window functions perform calculations across sets of rows related to the current row. They are essential for time-series analysis, rankings, and running calculations.
+
+## Window Function Syntax
+
+```sql
+function(args) OVER (
+    [PARTITION BY partition_expression]
+    [ORDER BY sort_expression]
+    [frame_clause]
+)
+```
+
+## Ranking Functions
+
+### ROW_NUMBER
+
+Assign unique sequential numbers:
+
+```sql
+SELECT 
+    symbol,
+    price,
+    timestamp,
+    row_number() OVER (PARTITION BY symbol ORDER BY timestamp) AS row_num
+FROM trades
+ORDER BY symbol, timestamp;
+```
+
+**Query Result:**
+```
+symbol  price   timestamp                      row_num
+AAPL    150.00  2023-12-28T10:00:00.000000Z    1
+AAPL    150.50  2023-12-28T10:30:00.000000Z    2
+AAPL    151.00  2023-12-28T11:00:00.000000Z    3
+GOOG    140.00  2023-12-28T10:15:00.000000Z    1
+GOOG    142.00  2023-12-28T11:00:00.000000Z    2
+```
+
+### RANK
+
+Rank with gaps for ties:
+
+```sql
+SELECT 
+    symbol,
+    price,
+    rank() OVER (ORDER BY price DESC) AS price_rank
+FROM trades;
+```
+
+**Query Result:**
+```
+symbol  price   price_rank
+MSFT    252.00  1
+MSFT    250.00  2
+AAPL    151.00  3
+AAPL    150.50  4
+```
+
+### DENSE_RANK
+
+Rank without gaps:
+
+```sql
+SELECT 
+    symbol,
+    price,
+    dense_rank() OVER (ORDER BY price DESC) AS dense_rank
+FROM trades;
+```
+
+## Aggregate Window Functions
+
+### Running Totals
+
+Calculate cumulative sums:
+
+```sql
+SELECT 
+    symbol,
+    timestamp,
+    quantity,
+    sum(quantity) OVER (
+        PARTITION BY symbol 
+        ORDER BY timestamp
+    ) AS cumulative_volume
+FROM trades
+ORDER BY symbol, timestamp;
+```
+
+**Query Result:**
+```
+symbol  timestamp                      quantity  cumulative_volume
+AAPL    2023-12-28T10:00:00.000000Z    100       100
+AAPL    2023-12-28T10:30:00.000000Z    150       250
+AAPL    2023-12-28T11:00:00.000000Z    200       450
+AAPL    2023-12-28T11:30:00.000000Z    120       570
+```
+
+### Moving Averages
+
+Calculate rolling averages:
+
+```sql
+SELECT 
+    symbol,
+    timestamp,
+    price,
+    avg(price) OVER (
+        PARTITION BY symbol 
+        ORDER BY timestamp 
+        ROWS BETWEEN 9 PRECEDING AND CURRENT ROW
+    ) AS moving_avg_10
+FROM trades
+ORDER BY symbol, timestamp;
+```
+
+**Query Result:**
+```
+symbol  timestamp                      price   moving_avg_10
+AAPL    2023-12-28T10:00:00.000000Z    150.00  150.00
+AAPL    2023-12-28T10:30:00.000000Z    150.50  150.25
+AAPL    2023-12-28T11:00:00.000000Z    151.00  150.50
+AAPL    2023-12-28T11:30:00.000000Z    151.50  150.75
+```
+
+### Running Statistics
+
+Calculate cumulative statistics:
+
+```sql
+SELECT 
+    symbol,
+    timestamp,
+    price,
+    min(price) OVER (PARTITION BY symbol ORDER BY timestamp) AS running_min,
+    max(price) OVER (PARTITION BY symbol ORDER BY timestamp) AS running_max,
+    avg(price) OVER (PARTITION BY symbol ORDER BY timestamp) AS running_avg
+FROM trades
+ORDER BY symbol, timestamp;
+```
+
+## Offset Functions
+
+### LAG
+
+Access previous row value:
+
+```sql
+SELECT 
+    symbol,
+    timestamp,
+    price,
+    lag(price) OVER (PARTITION BY symbol ORDER BY timestamp) AS prev_price,
+    price - lag(price) OVER (PARTITION BY symbol ORDER BY timestamp) AS price_change
+FROM trades
+ORDER BY symbol, timestamp;
+```
+
+**Query Result:**
+```
+symbol  timestamp                      price   prev_price  price_change
+AAPL    2023-12-28T10:00:00.000000Z    150.00  null        null
+AAPL    2023-12-28T10:30:00.000000Z    150.50  150.00      0.50
+AAPL    2023-12-28T11:00:00.000000Z    151.00  150.50      0.50
+AAPL    2023-12-28T11:30:00.000000Z    151.50  151.00      0.50
+```
+
+Specify offset and default value:
+
+```sql
+SELECT 
+    symbol,
+    price,
+    lag(price, 2, 0) OVER (PARTITION BY symbol ORDER BY timestamp) AS price_2_rows_ago
+FROM trades;
+```
+
+### LEAD
+
+Access next row value:
+
+```sql
+SELECT 
+    symbol,
+    timestamp,
+    price,
+    lead(price) OVER (PARTITION BY symbol ORDER BY timestamp) AS next_price,
+    lead(price) OVER (PARTITION BY symbol ORDER BY timestamp) - price AS future_change
+FROM trades
+ORDER BY symbol, timestamp;
+```
+
+**Query Result:**
+```
+symbol  timestamp                      price   next_price  future_change
+AAPL    2023-12-28T10:00:00.000000Z    150.00  150.50      0.50
+AAPL    2023-12-28T10:30:00.000000Z    150.50  151.00      0.50
+AAPL    2023-12-28T11:00:00.000000Z    151.00  151.50      0.50
+AAPL    2023-12-28T11:30:00.000000Z    151.50  null        null
+```
+
+### FIRST_VALUE
+
+Get first value in window:
+
+```sql
+SELECT 
+    symbol,
+    timestamp,
+    price,
+    first_value(price) OVER (
+        PARTITION BY symbol 
+        ORDER BY timestamp
+    ) AS opening_price
+FROM trades
+ORDER BY symbol, timestamp;
+```
+
+### LAST_VALUE
+
+Get last value in window:
+
+```sql
+SELECT 
+    symbol,
+    timestamp,
+    price,
+    last_value(price) OVER (
+        PARTITION BY symbol 
+        ORDER BY timestamp
+        ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
+    ) AS closing_price
+FROM trades
+ORDER BY symbol, timestamp;
+```
+
+## Frame Specifications
+
+### ROWS Frame
+
+Define window by row count:
+
+```sql
+-- Last 5 rows including current
+ROWS BETWEEN 4 PRECEDING AND CURRENT ROW
+
+-- Last 5 rows excluding current
+ROWS BETWEEN 5 PRECEDING AND 1 PRECEDING
+
+-- Current row and next 5 rows
+ROWS BETWEEN CURRENT ROW AND 5 FOLLOWING
+
+-- All rows from start to current
+ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+
+-- All rows in partition
+ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
+```
+
+### RANGE Frame
+
+Define window by value range:
+
+```sql
+-- Rows within timestamp range
+RANGE BETWEEN INTERVAL '5' MINUTE PRECEDING AND CURRENT ROW
+
+-- Rows within numeric range
+RANGE BETWEEN 10 PRECEDING AND 10 FOLLOWING
+```
+
+## Time-Series Window Patterns
+
+### Price Returns
+
+Calculate percentage returns:
+
+```sql
+SELECT 
+    symbol,
+    timestamp,
+    price,
+    (price - lag(price) OVER (PARTITION BY symbol ORDER BY timestamp)) / 
+        lag(price) OVER (PARTITION BY symbol ORDER BY timestamp) * 100 AS return_pct
+FROM trades
+ORDER BY symbol, timestamp;
+```
+
+**Query Result:**
+```
+symbol  timestamp                      price   return_pct
+AAPL    2023-12-28T10:00:00.000000Z    150.00  null
+AAPL    2023-12-28T10:30:00.000000Z    150.50  0.33
+AAPL    2023-12-28T11:00:00.000000Z    151.00  0.33
+AAPL    2023-12-28T11:30:00.000000Z    151.50  0.33
+```
+
+### Moving Standard Deviation
+
+Calculate rolling volatility:
+
+```sql
+SELECT 
+    symbol,
+    timestamp,
+    price,
+    stddev_samp(price) OVER (
+        PARTITION BY symbol 
+        ORDER BY timestamp 
+        ROWS BETWEEN 19 PRECEDING AND CURRENT ROW
+    ) AS volatility_20
+FROM trades
+ORDER BY symbol, timestamp;
+```
+
+### Bollinger Bands
+
+Calculate Bollinger Bands:
+
+```sql
+SELECT 
+    symbol,
+    timestamp,
+    price,
+    avg(price) OVER w AS middle_band,
+    avg(price) OVER w + 2 * stddev_samp(price) OVER w AS upper_band,
+    avg(price) OVER w - 2 * stddev_samp(price) OVER w AS lower_band
+FROM trades
+WINDOW w AS (
+    PARTITION BY symbol 
+    ORDER BY timestamp 
+    ROWS BETWEEN 19 PRECEDING AND CURRENT ROW
+)
+ORDER BY symbol, timestamp;
+```
+
+### Time Since Last Event
+
+Calculate time elapsed:
+
+```sql
+SELECT 
+    symbol,
+    timestamp,
+    datediff(
+        's',
+        lag(timestamp) OVER (PARTITION BY symbol ORDER BY timestamp),
+        timestamp
+    ) AS seconds_since_last_trade
+FROM trades
+ORDER BY symbol, timestamp;
+```
+
+**Query Result:**
+```
+symbol  timestamp                      seconds_since_last_trade
+AAPL    2023-12-28T10:00:00.000000Z    null
+AAPL    2023-12-28T10:30:00.000000Z    1800
+AAPL    2023-12-28T11:00:00.000000Z    1800
+AAPL    2023-12-28T11:30:00.000000Z    1800
+```
+
+### Running High/Low
+
+Track running extremes:
+
+```sql
+SELECT 
+    symbol,
+    timestamp,
+    price,
+    max(price) OVER (
+        PARTITION BY symbol 
+        ORDER BY timestamp
+    ) AS running_high,
+    min(price) OVER (
+        PARTITION BY symbol 
+        ORDER BY timestamp
+    ) AS running_low
+FROM trades
+ORDER BY symbol, timestamp;
+```
+
+### Session Indicators
+
+Identify new sessions:
+
+```sql
+SELECT 
+    symbol,
+    timestamp,
+    CASE 
+        WHEN lag(timestamp) OVER (PARTITION BY symbol ORDER BY timestamp) IS NULL 
+             OR datediff('m', lag(timestamp) OVER (PARTITION BY symbol ORDER BY timestamp), timestamp) > 5
+        THEN 1 
+        ELSE 0 
+    END AS new_session
+FROM trades
+ORDER BY symbol, timestamp;
+```
+
+## Named Windows
+
+Define reusable window specifications:
+
+```sql
+SELECT 
+    symbol,
+    timestamp,
+    price,
+    avg(price) OVER w AS moving_avg,
+    stddev_samp(price) OVER w AS moving_stddev,
+    min(price) OVER w AS moving_min,
+    max(price) OVER w AS moving_max
+FROM trades
+WINDOW w AS (
+    PARTITION BY symbol 
+    ORDER BY timestamp 
+    ROWS BETWEEN 9 PRECEDING AND CURRENT ROW
+)
+ORDER BY symbol, timestamp;
+```
+
+## Filtering Window Results
+
+Filter based on window calculations:
+
+```sql
+-- Get latest trade per symbol
+SELECT symbol, price, timestamp
+FROM (
+    SELECT 
+        symbol,
+        price,
+        timestamp,
+        row_number() OVER (PARTITION BY symbol ORDER BY timestamp DESC) AS rn
+    FROM trades
+)
+WHERE rn = 1;
+```
+
+**Query Result:**
+```
+symbol  price   timestamp
+AAPL    151.50  2023-12-28T11:30:00.000000Z
+GOOG    142.50  2023-12-28T11:15:00.000000Z
+MSFT    250.75  2023-12-28T11:20:00.000000Z
+```
+
+## Performance Considerations
+
+### Partition Efficiency
+
+Partition by indexed columns:
+
+```sql
+-- Efficient: symbol is indexed
+SELECT 
+    symbol,
+    avg(price) OVER (PARTITION BY symbol ORDER BY timestamp)
+FROM trades;
+```
+
+### Frame Size
+
+Smaller frames process faster:
+
+```sql
+-- Fast: small fixed frame
+ROWS BETWEEN 9 PRECEDING AND CURRENT ROW
+
+-- Slower: unbounded frame
+ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+```
+
+### LATEST ON Alternative
+
+For latest values, use LATEST ON instead of window functions:
+
+```sql
+-- Faster
+SELECT symbol, price, timestamp
+FROM trades
+LATEST ON timestamp PARTITION BY symbol;
+
+-- Slower
+SELECT symbol, price, timestamp
+FROM (
+    SELECT 
+        symbol,
+        price,
+        timestamp,
+        row_number() OVER (PARTITION BY symbol ORDER BY timestamp DESC) AS rn
+    FROM trades
+)
+WHERE rn = 1;
+```
+
+## Examples
+
+### Daily VWAP (Volume-Weighted Average Price)
+
+```sql
+SELECT 
+    symbol,
+    date_trunc('day', timestamp) AS day,
+    sum(price * quantity) / sum(quantity) AS vwap
+FROM trades
+GROUP BY symbol, day
+ORDER BY day DESC, symbol;
+```
+
+### Exponential Moving Average
+
+Approximate EMA using window functions:
+
+```sql
+WITH params AS (
+    SELECT 0.1 AS alpha  -- smoothing factor
+)
+SELECT 
+    symbol,
+    timestamp,
+    price,
+    avg(price) OVER (
+        PARTITION BY symbol 
+        ORDER BY timestamp 
+        ROWS BETWEEN 19 PRECEDING AND CURRENT ROW
+    ) AS ema_20
+FROM trades, params
+ORDER BY symbol, timestamp;
+```
+
+### Top N Per Group
+
+Get top 3 trades per symbol by quantity:
+
+```sql
+SELECT symbol, quantity, price, timestamp
+FROM (
+    SELECT 
+        symbol,
+        quantity,
+        price,
+        timestamp,
+        row_number() OVER (PARTITION BY symbol ORDER BY quantity DESC) AS rank
+    FROM trades
+)
+WHERE rank <= 3
+ORDER BY symbol, rank;
+```
+
+## Next Steps
+
+- [Aggregations](/sql/aggregations) - Learn about aggregate functions
+- [Time-Series Functions](/sql/time-series-functions) - Use SAMPLE BY and LATEST ON
+- [JOIN Operations](/sql/joins) - Combine data with time-series joins

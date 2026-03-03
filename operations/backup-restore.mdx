@@ -1,0 +1,557 @@
+---
+title: Backup and Restore
+description: Data backup strategies, snapshot management, and disaster recovery
+---
+
+## Overview
+
+QuestDB provides multiple backup and restore mechanisms:
+
+1. **File System Snapshots**: Copy database directory while server is running
+2. **Partition-level Backups**: Detach and backup individual partitions
+3. **SQL COPY TO**: Export tables to Parquet or CSV
+4. **WAL Replication**: Real-time replication to secondary instance
+
+## Database Directory Structure
+
+Understanding the directory layout is essential for backups:
+
+```
+<root>/
+├── conf/                 # Configuration files
+│   └── server.conf
+├── db/                   # Database root (cairo.root)
+│   ├── _tab_index.d      # Table registry
+│   ├── _wal_index.d      # WAL registry
+│   ├── table1/          # Non-WAL table
+│   │   ├── _meta        # Table metadata
+│   │   ├── _txn         # Transaction file
+│   │   ├── 2024-01/     # Partition directory
+│   │   └── 2024-02/
+│   ├── table2~wal/      # WAL table
+│   │   ├── _meta
+│   │   ├── _txn
+│   │   ├── _seq/        # Sequencer state
+│   │   ├── wal1/        # WAL segments
+│   │   └── 2024-01/     # Applied partitions
+│   └── sys.*/           # System tables
+├── log/                  # Server logs
+└── tmp/                  # Temporary files
+```
+
+## Backup Strategies
+
+### 1. Full Database Backup (Hot Backup)
+
+Create a consistent snapshot while QuestDB is running:
+
+**Using Filesystem Snapshots** (Recommended):
+
+```bash
+# LVM snapshot (Linux)
+sudo lvcreate -L 10G -s -n questdb_snap /dev/vg0/questdb
+sudo mount /dev/vg0/questdb_snap /mnt/backup
+tar -czf questdb_backup_$(date +%Y%m%d).tar.gz -C /mnt/backup .
+sudo umount /mnt/backup
+sudo lvremove -f /dev/vg0/questdb_snap
+```
+
+```bash
+# ZFS snapshot
+sudo zfs snapshot tank/questdb@backup_$(date +%Y%m%d)
+sudo zfs send tank/questdb@backup_$(date +%Y%m%d) | gzip > questdb_backup.zfs.gz
+```
+
+```bash
+# BTRFS snapshot
+sudo btrfs subvolume snapshot /mnt/questdb /mnt/questdb_backup
+tar -czf questdb_backup_$(date +%Y%m%d).tar.gz -C /mnt/questdb_backup .
+sudo btrfs subvolume delete /mnt/questdb_backup
+```
+
+**Using rsync** (Simple but less consistent):
+
+```bash
+# Create backup directory
+mkdir -p /backup/questdb_$(date +%Y%m%d)
+
+# Sync database directory
+rsync -av --delete \
+  <questdb_root>/db/ \
+  /backup/questdb_$(date +%Y%m%d)/db/
+
+# Sync configuration
+rsync -av \
+  <questdb_root>/conf/ \
+  /backup/questdb_$(date +%Y%m%d)/conf/
+
+# Compress backup
+tar -czf questdb_backup_$(date +%Y%m%d).tar.gz \
+  -C /backup questdb_$(date +%Y%m%d)
+```
+
+**Notes**:
+- Hot backups may capture tables mid-transaction
+- WAL tables are crash-safe and can be restored from any point
+- Non-WAL tables may need recovery if captured during write
+
+### 2. Cold Backup (Shutdown Required)
+
+**Most consistent method**:
+
+```bash
+# Stop QuestDB
+systemctl stop questdb
+# or
+pkill -f questdb
+
+# Verify process stopped
+ps aux | grep questdb
+
+# Create backup
+tar -czf questdb_backup_$(date +%Y%m%d).tar.gz \
+  -C <questdb_root> \
+  db conf
+
+# Alternative: copy to backup location
+cp -r <questdb_root>/db /backup/questdb_$(date +%Y%m%d)/
+cp -r <questdb_root>/conf /backup/questdb_$(date +%Y%m%d)/
+
+# Start QuestDB
+systemctl start questdb
+```
+
+### 3. Partition-Level Backup
+
+Backup individual partitions (useful for archival):
+
+**Detach partition**:
+```sql
+-- Mark partition for backup
+ALTER TABLE trades DETACH PARTITION
+WHERE timestamp >= '2024-01-01' AND timestamp < '2024-02-01';
+```
+
+This moves partition from `table/2024-01/` to `table/2024-01.detached/`.
+
+**Backup detached partition**:
+```bash
+# Locate detached partition
+cd <questdb_root>/db/trades/
+
+# Archive partition
+tar -czf trades_2024-01.tar.gz 2024-01.detached/
+
+# Move to backup location
+mv trades_2024-01.tar.gz /backup/partitions/
+
+# Remove from database
+rm -rf 2024-01.detached/
+```
+
+**Re-attach partition** (if needed):
+```bash
+# Restore partition archive
+tar -xzf /backup/partitions/trades_2024-01.tar.gz -C <questdb_root>/db/trades/
+
+# Rename directory
+mv <questdb_root>/db/trades/2024-01.detached/ \
+   <questdb_root>/db/trades/2024-01.attachable/
+```
+
+```sql
+-- Attach partition back to table
+ALTER TABLE trades ATTACH PARTITION LIST '2024-01';
+```
+
+### 4. Export to Parquet
+
+Export tables for external archival or analytics:
+
+```sql
+-- Export entire table
+COPY trades TO '/backup/exports/trades.parquet';
+
+-- Export with filters
+COPY trades
+WHERE timestamp >= '2024-01-01' AND timestamp < '2024-02-01'
+TO '/backup/exports/trades_2024_01.parquet';
+
+-- Export with compression
+COPY trades
+TO '/backup/exports/trades.parquet'
+WITH COMPRESSION LZ4_RAW;
+```
+
+**Configure export location**:
+```properties
+# Set export root directory
+cairo.sql.copy.export.root=export
+```
+
+**Compression options**:
+- `UNCOMPRESSED`: Fastest, largest files
+- `SNAPPY`: Balanced compression/speed (default)
+- `GZIP`: High compression, slower
+- `LZ4_RAW`: Fast compression
+- `ZSTD`: Excellent compression ratio
+
+### 5. Continuous Backup (WAL Replication)
+
+Set up a replication target for continuous backup:
+
+**Primary Configuration** (`server.conf`):
+```properties
+# Enable WAL
+cairo.wal.supported=true
+cairo.wal.enabled.default=true
+
+# Configure segment rollover for replication
+cairo.wal.segment.rollover.size=2M
+```
+
+**Replication** (Enterprise feature):
+- Replicas automatically sync WAL segments
+- Near-zero RPO (Recovery Point Objective)
+- Automatic failover capabilities
+
+## Backup Schedule
+
+### Automated Backup Script
+
+```bash
+#!/bin/bash
+# questdb_backup.sh
+
+BACKUP_DIR="/backup/questdb"
+QUESTDB_ROOT="/var/lib/questdb"
+RETENTION_DAYS=30
+DATE=$(date +%Y%m%d_%H%M%S)
+
+# Create backup directory
+mkdir -p "$BACKUP_DIR"
+
+# Create snapshot (LVM example)
+echo "Creating snapshot..."
+lvcreate -L 10G -s -n questdb_snap /dev/vg0/questdb
+
+# Mount snapshot
+mkdir -p /mnt/questdb_snap
+mount /dev/vg0/questdb_snap /mnt/questdb_snap
+
+# Create compressed backup
+echo "Creating backup archive..."
+tar -czf "$BACKUP_DIR/questdb_$DATE.tar.gz" -C /mnt/questdb_snap db conf
+
+# Cleanup snapshot
+umount /mnt/questdb_snap
+lvremove -f /dev/vg0/questdb_snap
+rmdir /mnt/questdb_snap
+
+# Remove old backups
+find "$BACKUP_DIR" -name "questdb_*.tar.gz" -mtime +$RETENTION_DAYS -delete
+
+echo "Backup completed: questdb_$DATE.tar.gz"
+```
+
+**Cron Schedule**:
+```cron
+# Daily backup at 2 AM
+0 2 * * * /usr/local/bin/questdb_backup.sh >> /var/log/questdb_backup.log 2>&1
+
+# Hourly partition export
+0 * * * * /usr/local/bin/questdb_export_partitions.sh
+```
+
+## Restore Procedures
+
+### Full Database Restore
+
+**From cold backup**:
+
+```bash
+# Stop QuestDB
+systemctl stop questdb
+
+# Backup current database (safety)
+mv <questdb_root>/db <questdb_root>/db.old
+mv <questdb_root>/conf <questdb_root>/conf.old
+
+# Extract backup
+tar -xzf questdb_backup_20240301.tar.gz -C <questdb_root>/
+
+# Verify permissions
+chown -R questdb:questdb <questdb_root>/db
+chmod -R 755 <questdb_root>/db
+
+# Start QuestDB
+systemctl start questdb
+
+# Verify
+curl http://localhost:9000/exec?query=SELECT+count(*)+FROM+trades
+```
+
+**From hot backup** (with recovery):
+
+```bash
+# Stop QuestDB
+systemctl stop questdb
+
+# Restore backup
+mv <questdb_root>/db <questdb_root>/db.old
+tar -xzf questdb_backup_20240301.tar.gz -C <questdb_root>/
+
+# QuestDB will auto-recover WAL tables on startup
+systemctl start questdb
+
+# Check logs for recovery messages
+tail -f <questdb_root>/log/stdout-*.txt
+```
+
+### Partition Restore
+
+**Restore from detached partition**:
+
+```bash
+# Extract partition
+tar -xzf trades_2024-01.tar.gz -C <questdb_root>/db/trades/
+
+# Rename to attachable
+mv <questdb_root>/db/trades/2024-01.detached/ \
+   <questdb_root>/db/trades/2024-01.attachable/
+
+# Fix permissions
+chown -R questdb:questdb <questdb_root>/db/trades/2024-01.attachable/
+```
+
+```sql
+-- Attach partition
+ALTER TABLE trades ATTACH PARTITION LIST '2024-01';
+
+-- Verify data
+SELECT count(*) FROM trades
+WHERE timestamp >= '2024-01-01' AND timestamp < '2024-02-01';
+```
+
+### Import from Parquet
+
+```sql
+-- Create table from Parquet schema
+CREATE TABLE trades_restored AS (
+  SELECT * FROM read_parquet('/backup/exports/trades.parquet')
+) TIMESTAMP(timestamp) PARTITION BY MONTH;
+
+-- Or append to existing table
+INSERT INTO trades
+SELECT * FROM read_parquet('/backup/exports/trades_2024_01.parquet');
+```
+
+**Configure import location**:
+```properties
+# Set import root directory
+cairo.sql.copy.root=import
+```
+
+## Point-in-Time Recovery
+
+### Using WAL Tables
+
+WAL tables support crash recovery automatically:
+
+1. QuestDB recovers uncommitted WAL segments on startup
+2. Applies transactions up to last consistent point
+3. No manual intervention required
+
+**Recovery process**:
+```
+[INFO] WAL recovery started for table 'trades'
+[INFO] Recovering WAL segment: wal1/0
+[INFO] Applied 150000 rows from segment
+[INFO] WAL recovery completed
+```
+
+### Using Partition Snapshots
+
+Restore database to specific partition boundary:
+
+```bash
+# Stop QuestDB
+systemctl stop questdb
+
+# List available partition backups
+ls -lh /backup/partitions/trades_*
+
+# Remove partitions after target date
+rm -rf <questdb_root>/db/trades/2024-0[3-9]*
+rm -rf <questdb_root>/db/trades/2024-1[0-2]*
+
+# Restore last good partition
+tar -xzf /backup/partitions/trades_2024-02.tar.gz \
+  -C <questdb_root>/db/trades/
+mv <questdb_root>/db/trades/2024-02.detached/ \
+   <questdb_root>/db/trades/2024-02/
+
+# Start QuestDB
+systemctl start questdb
+```
+
+```sql
+-- Verify restored state
+SELECT max(timestamp) FROM trades;
+```
+
+## Cloud Backups
+
+### AWS S3
+
+```bash
+#!/bin/bash
+# Backup to S3
+BUCKET="s3://my-questdb-backups"
+DATE=$(date +%Y%m%d)
+
+# Create snapshot backup
+tar -czf - -C <questdb_root> db conf | \
+  aws s3 cp - "$BUCKET/questdb_$DATE.tar.gz"
+
+# Sync partitions
+aws s3 sync <questdb_root>/db/trades/ \
+  "$BUCKET/partitions/trades/" \
+  --exclude "*" --include "*.detached/*"
+```
+
+**Restore from S3**:
+```bash
+aws s3 cp "$BUCKET/questdb_20240301.tar.gz" - | \
+  tar -xzf - -C <questdb_root>/
+```
+
+### Azure Blob Storage
+
+```bash
+# Upload backup
+az storage blob upload \
+  --account-name questdbbackups \
+  --container-name backups \
+  --name "questdb_$(date +%Y%m%d).tar.gz" \
+  --file questdb_backup.tar.gz
+
+# Download backup
+az storage blob download \
+  --account-name questdbbackups \
+  --container-name backups \
+  --name questdb_20240301.tar.gz \
+  --file /tmp/questdb_restore.tar.gz
+```
+
+### Google Cloud Storage
+
+```bash
+# Upload backup
+gsutil cp questdb_backup.tar.gz \
+  gs://my-questdb-backups/questdb_$(date +%Y%m%d).tar.gz
+
+# Download backup
+gsutil cp gs://my-questdb-backups/questdb_20240301.tar.gz \
+  /tmp/questdb_restore.tar.gz
+```
+
+## Disaster Recovery Plan
+
+### Recovery Time Objective (RTO)
+
+**Target**: < 15 minutes for full restore
+
+1. **Provision new server** (5 min)
+2. **Download latest backup** (5 min)
+3. **Extract and start QuestDB** (3 min)
+4. **Verify data integrity** (2 min)
+
+### Recovery Point Objective (RPO)
+
+**Target**: < 5 minutes data loss
+
+- Use WAL replication for RPO < 1 minute
+- Daily backups provide RPO = 24 hours
+- Hourly partition exports provide RPO = 1 hour
+
+### DR Checklist
+
+- [ ] Regular backup testing (monthly)
+- [ ] Documented restore procedures
+- [ ] Off-site backup storage
+- [ ] Encrypted backups for sensitive data
+- [ ] Automated backup monitoring
+- [ ] Backup retention policy
+- [ ] Disaster recovery runbook
+
+## Backup Best Practices
+
+1. **Test Restores Regularly**: Verify backups are valid
+2. **Multiple Backup Strategies**: Combine full + partition + export
+3. **Off-site Storage**: Store backups in different region/cloud
+4. **Encryption**: Encrypt backups at rest and in transit
+5. **Monitoring**: Alert on backup failures
+6. **Retention Policy**: Balance storage cost vs recovery needs
+7. **Documentation**: Keep restore procedures updated
+8. **Automation**: Use scripts and cron for consistency
+
+## Backup Monitoring
+
+### Check Backup Age
+
+```bash
+#!/bin/bash
+# Alert if latest backup is older than 24 hours
+
+LATEST_BACKUP=$(find /backup/questdb -name "questdb_*.tar.gz" -type f -printf '%T@ %p\n' | sort -n | tail -1 | cut -d' ' -f2)
+BACKUP_AGE=$(( ($(date +%s) - $(stat -c %Y "$LATEST_BACKUP")) / 3600 ))
+
+if [ $BACKUP_AGE -gt 24 ]; then
+  echo "WARNING: Latest backup is $BACKUP_AGE hours old"
+  # Send alert
+  curl -X POST https://alerts.example.com/webhook \
+    -d "Backup age exceeded threshold: $BACKUP_AGE hours"
+fi
+```
+
+### Verify Backup Integrity
+
+```bash
+# Test backup extraction
+tar -tzf questdb_backup.tar.gz > /dev/null
+if [ $? -eq 0 ]; then
+  echo "Backup integrity check: PASSED"
+else
+  echo "Backup integrity check: FAILED"
+fi
+```
+
+## Encryption
+
+### Encrypt Backups
+
+```bash
+# Encrypt with GPG
+tar -czf - -C <questdb_root> db conf | \
+  gpg --encrypt --recipient admin@example.com \
+  > questdb_backup_$(date +%Y%m%d).tar.gz.gpg
+
+# Encrypt with OpenSSL
+tar -czf - -C <questdb_root> db conf | \
+  openssl enc -aes-256-cbc -salt -pbkdf2 \
+  -out questdb_backup_$(date +%Y%m%d).tar.gz.enc
+```
+
+### Decrypt Backups
+
+```bash
+# Decrypt GPG
+gpg --decrypt questdb_backup_20240301.tar.gz.gpg | \
+  tar -xzf - -C <questdb_root>/
+
+# Decrypt OpenSSL
+openssl enc -aes-256-cbc -d -pbkdf2 \
+  -in questdb_backup_20240301.tar.gz.enc | \
+  tar -xzf - -C <questdb_root>/
+```

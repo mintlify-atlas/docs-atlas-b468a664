@@ -1,0 +1,177 @@
+---
+title: Python client
+description: QuestDB Python client for data ingestion
+---
+
+The QuestDB Python client provides a simple API for ingesting data using the InfluxDB Line Protocol.
+
+## Installation
+
+<CodeGroup>
+```bash pip
+pip install questdb
+```
+
+```bash poetry
+poetry add questdb
+```
+
+```bash conda
+conda install -c conda-forge questdb
+```
+</CodeGroup>
+
+## Quick start
+
+```python
+from questdb.ingress import Sender, TimestampNanos
+from datetime import datetime
+
+with Sender('localhost', 9009) as sender:
+    sender.row(
+        'trades',
+        symbols={'symbol': 'ETH-USD', 'side': 'sell'},
+        columns={'price': 2615.54, 'amount': 0.00044},
+        at=TimestampNanos.now())
+    sender.flush()
+```
+
+## Configuration
+
+```python
+from questdb.ingress import Sender
+
+with Sender(
+    'localhost',
+    9009,
+    auth=("admin", "your-private-key"),
+    tls=False,
+    auto_flush_rows=1000,
+    auto_flush_interval=1000) as sender:
+    # Send data
+    pass
+```
+
+### Parameters
+
+<ParamField path="host" type="str" required>
+  QuestDB server hostname
+</ParamField>
+
+<ParamField path="port" type="int" required>
+  Server port (default: 9009 for TCP)
+</ParamField>
+
+<ParamField path="auth" type="tuple">
+  Authentication tuple (key_id, private_key)
+</ParamField>
+
+<ParamField path="auto_flush_rows" type="int">
+  Auto-flush after this many rows (default: 75000)
+</ParamField>
+
+<ParamField path="auto_flush_interval" type="int">
+  Auto-flush interval in milliseconds (default: 1000)
+</ParamField>
+
+## Data types
+
+```python
+from questdb.ingress import Sender, TimestampNanos
+from datetime import datetime
+
+with Sender('localhost', 9009) as sender:
+    sender.row(
+        'sensors',
+        symbols={'location': 'warehouse-1'},  # Symbols
+        columns={
+            'sensor_id': 12345,                # Integer
+            'temperature': 23.5,               # Float
+            'status': 'active',                # String
+            'is_online': True                  # Boolean
+        },
+        at=TimestampNanos.now())
+    sender.flush()
+```
+
+## Pandas integration
+
+```python
+import pandas as pd
+from questdb.ingress import Sender
+
+df = pd.DataFrame({
+    'timestamp': pd.date_range('2024-01-01', periods=100, freq='1s'),
+    'symbol': ['BTC-USD'] * 100,
+    'price': [50000 + i for i in range(100)],
+    'volume': [1.5 + i * 0.1 for i in range(100)]
+})
+
+with Sender('localhost', 9009) as sender:
+    for _, row in df.iterrows():
+        sender.row(
+            'trades',
+            symbols={'symbol': row['symbol']},
+            columns={'price': row['price'], 'volume': row['volume']},
+            at=row['timestamp'])
+    sender.flush()
+```
+
+## Batch ingestion
+
+```python
+from questdb.ingress import Sender
+import random
+
+with Sender('localhost', 9009) as sender:
+    # Batch 10,000 rows
+    for i in range(10000):
+        sender.row(
+            'metrics',
+            symbols={'host': f'server-{i % 10}'},
+            columns={
+                'cpu': random.random() * 100,
+                'memory': random.random() * 100
+            })
+    sender.flush()
+```
+
+## Error handling
+
+```python
+from questdb.ingress import Sender, IngressError
+
+try:
+    with Sender('localhost', 9009) as sender:
+        sender.row(
+            'trades',
+            symbols={'symbol': 'BTC-USD'},
+            columns={'price': 50000.0})
+        sender.flush()
+except IngressError as e:
+    print(f'Ingestion error: {e}')
+except Exception as e:
+    print(f'Unexpected error: {e}')
+```
+
+## Performance tips
+
+<Tip>
+Use auto-flushing for optimal performance with continuous data streams.
+</Tip>
+
+1. **Enable auto-flush**: Let the client handle batching automatically
+2. **Use context manager**: Ensures proper cleanup
+3. **Batch writes**: Send multiple rows before flushing
+4. **Use symbols**: Convert low-cardinality strings to symbols
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Pandas Integration" icon="python" href="/integrations/pandas">
+    Learn about Pandas integration
+  </Card>
+  <Card title="ILP Reference" icon="book" href="/api/ilp/overview">
+    Understand the protocol
+  </Card>
+</CardGroup>

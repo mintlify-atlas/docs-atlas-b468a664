@@ -1,0 +1,384 @@
+---
+title: "Telegraf Integration"
+description: "Collect and send metrics to QuestDB using Telegraf"
+---
+
+## Overview
+
+Telegraf is an agent for collecting, processing, and writing metrics. QuestDB integrates with Telegraf through the InfluxDB Line Protocol (ILP), providing a high-performance path for metrics ingestion.
+
+## Why Telegraf + QuestDB?
+
+- **High-throughput ingestion**: ILP on port 9009 handles millions of metrics per second
+- **200+ input plugins**: Collect metrics from systems, services, and APIs
+- **Native protocol support**: Use InfluxDB Line Protocol for optimal performance
+- **Low-latency writes**: Sub-millisecond ingestion latency
+
+## Prerequisites
+
+- QuestDB running (port 9009 for InfluxDB Line Protocol)
+- Telegraf installed (version 1.20 or later)
+
+## Installation
+
+### Install Telegraf
+
+<CodeGroup>
+
+```bash Ubuntu/Debian
+wget -q https://repos.influxdata.com/influxdata-archive_compat.key
+echo '393e8779c89ac8d958f81f942f9ad7fb82a25e133faddaf92e15b16e6ac9ce4c influxdata-archive_compat.key' | sha256sum -c && cat influxdata-archive_compat.key | gpg --dearmor | sudo tee /etc/apt/trusted.gpg.d/influxdata-archive_compat.gpg > /dev/null
+echo 'deb [signed-by=/etc/apt/trusted.gpg.d/influxdata-archive_compat.gpg] https://repos.influxdata.com/debian stable main' | sudo tee /etc/apt/sources.list.d/influxdata.list
+sudo apt-get update && sudo apt-get install telegraf
+```
+
+```bash macOS
+brew install telegraf
+```
+
+```bash Docker
+docker pull telegraf:latest
+```
+
+</CodeGroup>
+
+### Start QuestDB
+
+```bash
+docker run -p 9000:9000 -p 9009:9009 -p 8812:8812 questdb/questdb
+```
+
+<Note>
+QuestDB uses **port 9009** for InfluxDB Line Protocol (ILP) ingestion, providing the highest throughput for metrics collection.
+</Note>
+
+## Configuration
+
+### Basic Telegraf Configuration
+
+Create or edit `/etc/telegraf/telegraf.conf`:
+
+```toml
+# Global agent configuration
+[agent]
+  interval = "10s"
+  round_interval = true
+  metric_batch_size = 5000
+  metric_buffer_limit = 100000
+  flush_interval = "1s"
+  precision = "1ms"
+
+# QuestDB output plugin (InfluxDB Line Protocol)
+[[outputs.socket_writer]]
+  address = "tcp://localhost:9009"
+  data_format = "influx"
+  
+# System metrics input
+[[inputs.cpu]]
+  percpu = true
+  totalcpu = true
+  collect_cpu_time = false
+  report_active = false
+
+[[inputs.mem]]
+
+[[inputs.disk]]
+  ignore_fs = ["tmpfs", "devtmpfs", "devfs", "iso9660", "overlay", "aufs", "squashfs"]
+
+[[inputs.net]]
+```
+
+### Advanced Configuration with Authentication
+
+```toml
+[[outputs.socket_writer]]
+  address = "tcp://localhost:9009"
+  data_format = "influx"
+  
+  # Connection settings
+  keep_alive_period = "5m"
+  
+  # Optional: TLS configuration (QuestDB Enterprise)
+  # tls_ca = "/path/to/ca.crt"
+  # tls_cert = "/path/to/client.crt"
+  # tls_key = "/path/to/client.key"
+```
+
+## Input Plugin Examples
+
+### System Monitoring
+
+```toml
+# CPU metrics
+[[inputs.cpu]]
+  percpu = true
+  totalcpu = true
+  fieldpass = ["usage_idle", "usage_system", "usage_user"]
+
+# Memory metrics
+[[inputs.mem]]
+  fieldpass = ["used_percent", "available_percent", "cached", "free"]
+
+# Disk I/O metrics
+[[inputs.diskio]]
+  devices = ["sda", "sdb"]
+
+# Network metrics
+[[inputs.net]]
+  interfaces = ["eth0", "eth1"]
+  fieldpass = ["bytes_sent", "bytes_recv", "packets_sent", "packets_recv"]
+
+# System load
+[[inputs.system]]
+  fieldpass = ["load1", "load5", "load15", "n_cpus"]
+```
+
+### Docker Monitoring
+
+```toml
+[[inputs.docker]]
+  endpoint = "unix:///var/run/docker.sock"
+  container_names = []
+  timeout = "5s"
+  perdevice = true
+  total = true
+  docker_label_include = ["com.docker.compose.service"]
+```
+
+### PostgreSQL Monitoring
+
+```toml
+[[inputs.postgresql]]
+  address = "host=localhost user=postgres password=postgres dbname=postgres sslmode=disable"
+  databases = ["postgres", "myapp"]
+```
+
+### HTTP API Monitoring
+
+```toml
+[[inputs.http_response]]
+  urls = [
+    "https://api.example.com/health",
+    "https://app.example.com"
+  ]
+  method = "GET"
+  response_timeout = "5s"
+  follow_redirects = true
+```
+
+### Kafka Monitoring
+
+```toml
+[[inputs.kafka_consumer]]
+  brokers = ["localhost:9092"]
+  topics = ["metrics"]
+  consumer_group = "telegraf_metrics_consumers"
+  data_format = "json"
+```
+
+## Running Telegraf
+
+### Start Telegraf Service
+
+```bash
+# Linux (systemd)
+sudo systemctl start telegraf
+sudo systemctl enable telegraf
+
+# macOS
+brew services start telegraf
+
+# Docker
+docker run -d --name telegraf \
+  -v $PWD/telegraf.conf:/etc/telegraf/telegraf.conf:ro \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  telegraf
+```
+
+### Test Configuration
+
+```bash
+# Test configuration syntax
+telegraf --config /etc/telegraf/telegraf.conf --test
+
+# Run once and output metrics
+telegraf --config /etc/telegraf/telegraf.conf --once
+```
+
+## Querying Metrics in QuestDB
+
+### View Collected Metrics
+
+Open http://localhost:9000 and query:
+
+```sql
+-- List all tables (one per measurement)
+SHOW TABLES;
+
+-- Query CPU metrics
+SELECT * FROM cpu LIMIT 100;
+
+-- Aggregate memory usage over time
+SELECT 
+  timestamp,
+  avg(used_percent) as avg_memory_used
+FROM mem
+WHERE timestamp > dateadd('h', -1, now())
+SAMPLE BY 1m;
+```
+
+### Time-Series Analysis
+
+```sql
+-- CPU usage by core over last hour
+SELECT 
+  timestamp,
+  cpu,
+  avg(usage_user) as avg_user,
+  avg(usage_system) as avg_system
+FROM cpu
+WHERE timestamp > dateadd('h', -1, now())
+  AND cpu != 'cpu-total'
+SAMPLE BY 5m
+ORDER BY timestamp DESC;
+```
+
+### Network Traffic Analysis
+
+```sql
+-- Network bytes sent/received per minute
+SELECT 
+  timestamp,
+  interface,
+  sum(bytes_sent) as total_sent,
+  sum(bytes_recv) as total_recv
+FROM net
+WHERE timestamp > dateadd('h', -24, now())
+SAMPLE BY 1m;
+```
+
+## Performance Tuning
+
+<Tip>
+**Optimize for High-Throughput**
+
+- Increase `metric_batch_size` to 5000-10000
+- Lower `flush_interval` to 1s for real-time ingestion
+- Use `precision = "1ms"` for microsecond timestamps
+- Enable `flush_jitter` to distribute load
+</Tip>
+
+### High-Performance Configuration
+
+```toml
+[agent]
+  interval = "10s"
+  metric_batch_size = 10000
+  metric_buffer_limit = 100000
+  flush_interval = "1s"
+  flush_jitter = "1s"
+  precision = "1ms"
+  
+[[outputs.socket_writer]]
+  address = "tcp://localhost:9009"
+  data_format = "influx"
+  keep_alive_period = "5m"
+```
+
+## Data Retention
+
+Manage data retention in QuestDB:
+
+```sql
+-- Drop old partitions (data older than 30 days)
+ALTER TABLE cpu DROP PARTITION LIST '2024-01', '2024-02';
+
+-- Automated retention via scheduled jobs
+CREATE TABLE cpu_metrics AS (
+  SELECT * FROM cpu
+) TIMESTAMP(timestamp) PARTITION BY DAY;
+```
+
+## Monitoring Telegraf
+
+### Check Telegraf Status
+
+```bash
+# View logs
+sudo journalctl -u telegraf -f
+
+# Check service status
+sudo systemctl status telegraf
+```
+
+### Internal Metrics
+
+Enable Telegraf self-monitoring:
+
+```toml
+[[inputs.internal]]
+  collect_memstats = true
+```
+
+Query Telegraf's own metrics:
+
+```sql
+SELECT * FROM internal_agent LIMIT 100;
+SELECT * FROM internal_gather LIMIT 100;
+```
+
+## Visualization with Grafana
+
+Connect Grafana to QuestDB (PostgreSQL datasource on port 8812) and create dashboards:
+
+```sql
+-- Panel query: CPU usage
+SELECT 
+  timestamp as time,
+  avg(usage_user) as cpu_user,
+  avg(usage_system) as cpu_system
+FROM cpu
+WHERE timestamp > $__timeFrom() 
+  AND timestamp < $__timeTo()
+SAMPLE BY 1m
+```
+
+## Troubleshooting
+
+### Connection Issues
+
+**Cannot connect to port 9009**
+- Verify QuestDB is running
+- Check ILP is enabled (default: enabled)
+- Test connection: `telnet localhost 9009`
+
+**No data appearing in QuestDB**
+- Run `telegraf --test` to verify output
+- Check Telegraf logs: `journalctl -u telegraf`
+- Verify InfluxDB Line Protocol format
+
+### Performance Issues
+
+**High memory usage**
+- Reduce `metric_buffer_limit`
+- Increase `flush_interval`
+- Filter unnecessary metrics with `fieldpass`
+
+**Ingestion lag**
+- Increase `metric_batch_size`
+- Check network latency to QuestDB
+- Monitor QuestDB resource usage
+
+## Next Steps
+
+<CardGroup cols={2}>
+
+<Card title="InfluxDB Line Protocol" icon="bolt" href="/ingestion/influxdb-line-protocol">
+  Learn about the ILP protocol
+</Card>
+
+<Card title="Grafana Integration" icon="chart-line" href="/integrations/grafana">
+  Visualize metrics with Grafana
+</Card>
+
+</CardGroup>

@@ -1,0 +1,352 @@
+---
+title: Installation
+description: Install QuestDB using Docker, Homebrew, binaries, or build from source
+---
+
+# Installation Guide
+
+QuestDB can be installed using multiple methods depending on your environment and requirements. Choose the installation method that best fits your needs.
+
+## Docker (Recommended)
+
+Docker provides the fastest and most convenient way to get started with QuestDB.
+
+### Basic Docker Setup
+
+<Steps>
+  <Step title="Pull the latest image">
+    ```bash
+    docker pull questdb/questdb
+    ```
+  </Step>
+
+  <Step title="Run QuestDB interactively">
+    ```bash
+    docker run --rm -it -p 9000:9000 -p 9009:9009 -p 8812:8812 questdb/questdb
+    ```
+
+    <Note>
+      The `--rm` flag removes the container when stopped. The `-it` flags run the container interactively.
+    </Note>
+  </Step>
+</Steps>
+
+### Docker with Persistent Storage
+
+For production use, mount a volume to persist data:
+
+<CodeGroup>
+```bash Linux/macOS
+docker run --rm -it \
+  -p 9000:9000 -p 9009:9009 -p 8812:8812 \
+  -v "$HOME/questdb:/var/lib/questdb" \
+  questdb/questdb
+```
+
+```bash Windows (PowerShell)
+docker run --rm -it `
+  -p 9000:9000 -p 9009:9009 -p 8812:8812 `
+  -v "${HOME}\questdb:/var/lib/questdb" `
+  questdb/questdb
+```
+</CodeGroup>
+
+### Named Container for Easy Management
+
+Create a named container for easy start/stop operations:
+
+<Steps>
+  <Step title="Create the container">
+    ```bash
+    docker create --name questdb \
+      -p 9000:9000 -p 9009:9009 -p 8812:8812 \
+      -v "$HOME/questdb:/var/lib/questdb" \
+      questdb/questdb
+    ```
+  </Step>
+
+  <Step title="Manage the container">
+    ```bash
+    # Start QuestDB
+    docker start questdb
+
+    # Stop QuestDB
+    docker stop questdb
+
+    # View logs
+    docker logs questdb
+
+    # Follow logs in real-time
+    docker logs -f questdb
+    ```
+  </Step>
+</Steps>
+
+<Tip>
+  QuestDB stores data in `/var/lib/questdb` inside the container. Mount this directory to your host system to persist data across container restarts.
+</Tip>
+
+## Homebrew (macOS)
+
+macOS users can install QuestDB using Homebrew for a native experience.
+
+<Steps>
+  <Step title="Install QuestDB">
+    ```bash
+    brew install questdb
+    ```
+  </Step>
+
+  <Step title="Start QuestDB as a service">
+    ```bash
+    brew services start questdb
+    ```
+
+    This starts QuestDB in the background and configures it to start automatically on system boot.
+  </Step>
+
+  <Step title="Or run QuestDB manually">
+    ```bash
+    questdb start
+    ```
+
+    To stop:
+    ```bash
+    questdb stop
+    ```
+  </Step>
+</Steps>
+
+<Note>
+  When installed via Homebrew, QuestDB stores data in `/usr/local/var/questdb` by default.
+</Note>
+
+## Binary Installation
+
+Download pre-built binaries for direct installation on Linux, macOS, or Windows.
+
+<Steps>
+  <Step title="Download the binary">
+    Visit the [QuestDB releases page](https://github.com/questdb/questdb/releases) and download the appropriate binary for your platform:
+    
+    - `questdb-<version>-rt-linux-amd64.tar.gz` for Linux
+    - `questdb-<version>-rt-darwin-amd64.tar.gz` for macOS
+    - `questdb-<version>-rt-windows-amd64.zip` for Windows
+  </Step>
+
+  <Step title="Extract the archive">
+    <CodeGroup>
+    ```bash Linux/macOS
+    tar -xvf questdb-<version>-rt-linux-amd64.tar.gz
+    cd questdb-<version>-rt-linux-amd64
+    ```
+
+    ```bash Windows
+    # Extract using Windows Explorer or 7-Zip
+    # Then navigate to the extracted directory
+    ```
+    </CodeGroup>
+  </Step>
+
+  <Step title="Run QuestDB">
+    <CodeGroup>
+    ```bash Linux/macOS
+    # Create a data directory
+    mkdir ~/questdb-data
+
+    # Start QuestDB
+    ./questdb.sh start -d ~/questdb-data
+    ```
+
+    ```bash Windows
+    # Create a data directory
+    mkdir C:\questdb-data
+
+    # Start QuestDB
+    questdb.exe start -d C:\questdb-data
+    ```
+    </CodeGroup>
+  </Step>
+</Steps>
+
+## Building from Source
+
+For contributors and advanced users who want to build QuestDB from source.
+
+### Prerequisites
+
+- Java 11 64-bit or higher
+- Maven 3
+- Git
+
+<Steps>
+  <Step title="Clone the repository">
+    ```bash
+    git clone https://github.com/questdb/questdb.git
+    cd questdb
+    ```
+  </Step>
+
+  <Step title="Build the JAR">
+    <CodeGroup>
+    ```bash Without Web Console (faster)
+    mvn clean package -DskipTests
+    ```
+
+    ```bash With Web Console
+    mvn clean package -DskipTests -P build-web-console
+    ```
+
+    ```bash With Web Console and Binaries
+    mvn clean package -DskipTests -P build-web-console,build-binaries
+    ```
+    </CodeGroup>
+
+    <Note>
+      Building with the web console and binaries takes longer but provides a complete distribution.
+    </Note>
+  </Step>
+
+  <Step title="Run QuestDB">
+    ```bash
+    # Create a data directory
+    mkdir ~/questdb-data
+
+    # Run from JAR
+    java -p core/target/questdb-<version>-SNAPSHOT.jar \
+      -m io.questdb/io.questdb.ServerMain \
+      -d ~/questdb-data
+    ```
+
+    <Tip>
+      The web console will be available at [http://localhost:9000](http://localhost:9000)
+    </Tip>
+  </Step>
+</Steps>
+
+### Building Native C/C++ Libraries
+
+QuestDB uses native C/C++ libraries for performance-critical operations. To rebuild these:
+
+<Steps>
+  <Step title="Install build tools">
+    - **Linux**: `gcc`, `g++`, `cmake`
+    - **macOS**: Xcode Command Line Tools, `cmake`
+    - **Windows**: Visual Studio with C++ tools, `cmake`
+  </Step>
+
+  <Step title="Build native libraries">
+    ```bash
+    cd core
+    cmake -B build/release -DCMAKE_BUILD_TYPE=Release
+    cmake --build build/release --config Release
+    ```
+
+    Native libraries are automatically placed in `core/src/main/resources/io/questdb/bin/`
+  </Step>
+</Steps>
+
+## Verifying Your Installation
+
+After installation, verify QuestDB is running correctly:
+
+<Steps>
+  <Step title="Check the web console">
+    Open [http://localhost:9000](http://localhost:9000) in your browser. You should see the QuestDB Web Console.
+  </Step>
+
+  <Step title="Test the REST API">
+    ```bash
+    curl http://localhost:9000/exec?query=SELECT%20version()
+    ```
+
+    You should receive a JSON response with the QuestDB version.
+  </Step>
+
+  <Step title="Test PostgreSQL wire protocol">
+    ```bash
+    psql -h localhost -p 8812 -U admin -d qdb
+    ```
+
+    <Note>
+      The default database is `qdb` with user `admin` and password `quest`.
+    </Note>
+  </Step>
+</Steps>
+
+## Port Reference
+
+QuestDB uses the following default ports:
+
+| Port | Protocol | Description |
+|------|----------|-------------|
+| **9000** | HTTP | Web Console and REST API |
+| **9009** | TCP | InfluxDB Line Protocol (ILP) for high-performance ingestion |
+| **8812** | TCP | PostgreSQL wire protocol for programmatic queries |
+
+<Warning>
+  Ensure these ports are available before starting QuestDB. If you need to use different ports, see the [Configuration guide](/configuration) for details on port customization.
+</Warning>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Quick Start" icon="rocket" href="/quickstart">
+    Run your first queries and explore QuestDB's features
+  </Card>
+  
+  <Card title="Configuration" icon="gear" href="/configuration">
+    Configure QuestDB for production workloads
+  </Card>
+  
+  <Card title="Ingestion" icon="arrow-up-to-line" href="/ingestion">
+    Learn about data ingestion methods
+  </Card>
+  
+  <Card title="Deployment" icon="cloud" href="/deployment">
+    Deploy QuestDB to AWS, GCP, or Kubernetes
+  </Card>
+</CardGroup>
+
+## Troubleshooting
+
+### Port Already in Use
+
+If you see an error about ports already in use:
+
+```bash
+# Check what's using a port (Linux/macOS)
+lsof -i :9000
+
+# Windows
+netstat -ano | findstr :9000
+```
+
+Either stop the conflicting service or configure QuestDB to use different ports.
+
+### Docker Permission Errors
+
+If you encounter permission errors when mounting volumes on Linux:
+
+```bash
+# Run with user ID mapping
+docker run --rm -it \
+  --user $(id -u):$(id -g) \
+  -p 9000:9000 -p 9009:9009 -p 8812:8812 \
+  -v "$HOME/questdb:/var/lib/questdb" \
+  questdb/questdb
+```
+
+### Java Version Issues
+
+Ensure you're using Java 11 or higher:
+
+```bash
+java --version
+```
+
+If you have multiple Java versions, set `JAVA_HOME` to point to Java 11+:
+
+```bash
+export JAVA_HOME=/path/to/java11
+```

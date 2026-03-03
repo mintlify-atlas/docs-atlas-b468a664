@@ -1,0 +1,562 @@
+---
+title: Google Cloud Platform Deployment
+description: Deploy QuestDB on GCP using Compute Engine, Cloud Run, and GKE
+---
+
+## Overview
+
+Deploy QuestDB on Google Cloud Platform using Compute Engine VMs, Cloud Run for serverless containers, or Google Kubernetes Engine (GKE) for orchestrated deployments.
+
+## Compute Engine Deployment
+
+### Quick Launch with Docker
+
+1. Create a Compute Engine instance:
+
+```bash
+gcloud compute instances create questdb-instance \
+  --zone=us-central1-a \
+  --machine-type=n2-standard-4 \
+  --image-family=cos-stable \
+  --image-project=cos-cloud \
+  --boot-disk-size=50GB \
+  --boot-disk-type=pd-ssd \
+  --metadata=startup-script='#!/bin/bash
+    docker run -d \
+      -p 9000:9000 \
+      -p 8812:8812 \
+      -p 9009:9009 \
+      -v /mnt/disks/questdb-data:/var/lib/questdb \
+      --name questdb \
+      --restart unless-stopped \
+      questdb/questdb:latest'
+```
+
+2. Access the web console:
+
+```bash
+# Get external IP
+gcloud compute instances describe questdb-instance \
+  --zone=us-central1-a \
+  --format='get(networkInterfaces[0].accessConfigs[0].natIP)'
+
+# Navigate to http://<EXTERNAL_IP>:9000
+```
+
+### Machine Type Recommendations
+
+| Machine Type | vCPUs | Memory | Use Case |
+|-------------|-------|--------|----------|
+| e2-standard-2 | 2 | 8 GB | Development/Testing |
+| n2-standard-4 | 4 | 16 GB | Small Production |
+| n2-standard-8 | 8 | 32 GB | Medium Production |
+| n2-standard-16 | 16 | 64 GB | Large Production |
+| n2-highmem-8 | 8 | 64 GB | Memory-Intensive |
+| c2-standard-16 | 16 | 64 GB | CPU-Intensive |
+
+### Persistent Disk Configuration
+
+Create and attach a persistent disk:
+
+```bash
+# Create SSD persistent disk
+gcloud compute disks create questdb-data \
+  --size=100GB \
+  --type=pd-ssd \
+  --zone=us-central1-a
+
+# Attach to instance
+gcloud compute instances attach-disk questdb-instance \
+  --disk=questdb-data \
+  --zone=us-central1-a
+
+# SSH into instance and format
+gcloud compute ssh questdb-instance --zone=us-central1-a
+
+sudo mkfs.ext4 -F /dev/sdb
+sudo mkdir -p /mnt/disks/questdb-data
+sudo mount /dev/sdb /mnt/disks/questdb-data
+sudo chmod a+w /mnt/disks/questdb-data
+
+# Add to /etc/fstab for auto-mount
+echo '/dev/sdb /mnt/disks/questdb-data ext4 defaults 0 0' | sudo tee -a /etc/fstab
+```
+
+### Firewall Rules
+
+Create firewall rules to allow traffic:
+
+```bash
+# Web Console & REST API (9000)
+gcloud compute firewall-rules create allow-questdb-http \
+  --allow=tcp:9000 \
+  --source-ranges=0.0.0.0/0 \
+  --description="Allow QuestDB HTTP traffic"
+
+# PostgreSQL Wire Protocol (8812)
+gcloud compute firewall-rules create allow-questdb-pg \
+  --allow=tcp:8812 \
+  --source-ranges=0.0.0.0/0 \
+  --description="Allow QuestDB PostgreSQL traffic"
+
+# InfluxDB Line Protocol (9009)
+gcloud compute firewall-rules create allow-questdb-ilp \
+  --allow=tcp:9009 \
+  --source-ranges=0.0.0.0/0 \
+  --description="Allow QuestDB ILP traffic"
+```
+
+### Startup Script
+
+Create a comprehensive startup script:
+
+```bash
+#!/bin/bash
+
+# Install Docker (if not using Container-Optimized OS)
+sudo apt-get update
+sudo apt-get install -y docker.io
+sudo systemctl start docker
+sudo systemctl enable docker
+
+# Create data directory
+sudo mkdir -p /mnt/disks/questdb-data
+sudo chmod a+w /mnt/disks/questdb-data
+
+# Run QuestDB
+docker run -d \
+  --name questdb \
+  --restart unless-stopped \
+  -p 9000:9000 \
+  -p 8812:8812 \
+  -p 9009:9009 \
+  -v /mnt/disks/questdb-data:/var/lib/questdb \
+  -e QDB_PACKAGE=gcp \
+  -e JVM_PREPEND="-Xms4G -Xmx12G -XX:+UseParallelGC" \
+  questdb/questdb:latest
+```
+
+### Managed Instance Groups (Auto-scaling)
+
+Create instance template:
+
+```bash
+gcloud compute instance-templates create questdb-template \
+  --machine-type=n2-standard-4 \
+  --image-family=cos-stable \
+  --image-project=cos-cloud \
+  --boot-disk-size=50GB \
+  --boot-disk-type=pd-ssd \
+  --metadata-from-file=startup-script=startup.sh \
+  --tags=questdb-server
+
+# Create managed instance group
+gcloud compute instance-groups managed create questdb-group \
+  --base-instance-name=questdb \
+  --template=questdb-template \
+  --size=3 \
+  --zone=us-central1-a
+
+# Configure autoscaling
+gcloud compute instance-groups managed set-autoscaling questdb-group \
+  --zone=us-central1-a \
+  --max-num-replicas=10 \
+  --min-num-replicas=2 \
+  --target-cpu-utilization=0.7
+```
+
+## Cloud Run Deployment
+
+### Deploy to Cloud Run
+
+```bash
+# Deploy QuestDB container
+gcloud run deploy questdb \
+  --image=questdb/questdb:latest \
+  --platform=managed \
+  --region=us-central1 \
+  --allow-unauthenticated \
+  --port=9000 \
+  --memory=8Gi \
+  --cpu=4 \
+  --timeout=3600 \
+  --max-instances=10 \
+  --min-instances=1
+```
+
+**Note**: Cloud Run is best suited for stateless workloads. For persistent time-series data, use Compute Engine or GKE with persistent disks.
+
+## Google Kubernetes Engine (GKE) Deployment
+
+### Create GKE Cluster
+
+```bash
+# Create cluster
+gcloud container clusters create questdb-cluster \
+  --zone=us-central1-a \
+  --num-nodes=3 \
+  --machine-type=n2-standard-4 \
+  --disk-type=pd-ssd \
+  --disk-size=100 \
+  --enable-autoscaling \
+  --min-nodes=2 \
+  --max-nodes=10 \
+  --enable-autorepair \
+  --enable-autoupgrade
+
+# Get credentials
+gcloud container clusters get-credentials questdb-cluster \
+  --zone=us-central1-a
+```
+
+### Deploy with Helm
+
+```bash
+# Add Helm repository
+helm repo add questdb https://helm.questdb.io/
+helm repo update
+
+# Install QuestDB
+helm install questdb questdb/questdb \
+  --set service.type=LoadBalancer \
+  --set persistence.size=100Gi \
+  --set persistence.storageClass=standard-rwo \
+  --set resources.requests.memory=4Gi \
+  --set resources.requests.cpu=2000m \
+  --set resources.limits.memory=16Gi \
+  --set resources.limits.cpu=8000m
+```
+
+### Custom values.yaml for GKE
+
+```yaml
+replicaCount: 1
+
+image:
+  repository: questdb/questdb
+  tag: latest
+  pullPolicy: IfNotPresent
+
+service:
+  type: LoadBalancer
+  annotations:
+    cloud.google.com/load-balancer-type: "Internal"
+  http:
+    port: 9000
+  postgresql:
+    port: 8812
+  ilp:
+    port: 9009
+
+persistence:
+  enabled: true
+  storageClass: "pd-ssd"
+  accessMode: ReadWriteOnce
+  size: 200Gi
+
+resources:
+  requests:
+    memory: "8Gi"
+    cpu: "4000m"
+  limits:
+    memory: "32Gi"
+    cpu: "16000m"
+
+env:
+  - name: QDB_PACKAGE
+    value: "gke"
+  - name: JVM_PREPEND
+    value: "-Xms8G -Xmx24G -XX:+UseParallelGC"
+
+affinity:
+  nodeAffinity:
+    preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 100
+        preference:
+          matchExpressions:
+            - key: cloud.google.com/gke-nodepool
+              operator: In
+              values:
+                - questdb-pool
+
+livenessProbe:
+  httpGet:
+    path: /
+    port: 9000
+  initialDelaySeconds: 60
+  periodSeconds: 30
+  timeoutSeconds: 10
+
+readinessProbe:
+  httpGet:
+    path: /
+    port: 9000
+  initialDelaySeconds: 30
+  periodSeconds: 10
+  timeoutSeconds: 5
+```
+
+Deploy:
+
+```bash
+helm install questdb questdb/questdb -f values-gke.yaml
+```
+
+### GKE Persistent Disk StorageClass
+
+```yaml
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: pd-ssd
+provisioner: kubernetes.io/gce-pd
+parameters:
+  type: pd-ssd
+  replication-type: regional-pd
+allowVolumeExpansion: true
+reclaimPolicy: Retain
+```
+
+## Load Balancing
+
+### HTTP(S) Load Balancer
+
+Create load balancer for web console:
+
+```bash
+# Create health check
+gcloud compute health-checks create http questdb-health-check \
+  --port=9000 \
+  --request-path=/
+
+# Create backend service
+gcloud compute backend-services create questdb-backend \
+  --protocol=HTTP \
+  --health-checks=questdb-health-check \
+  --global
+
+# Add instance group to backend
+gcloud compute backend-services add-backend questdb-backend \
+  --instance-group=questdb-group \
+  --instance-group-zone=us-central1-a \
+  --global
+
+# Create URL map
+gcloud compute url-maps create questdb-url-map \
+  --default-service=questdb-backend
+
+# Create HTTP proxy
+gcloud compute target-http-proxies create questdb-http-proxy \
+  --url-map=questdb-url-map
+
+# Create forwarding rule
+gcloud compute forwarding-rules create questdb-http-rule \
+  --global \
+  --target-http-proxy=questdb-http-proxy \
+  --ports=80
+```
+
+### Network Load Balancer (TCP)
+
+For PostgreSQL and ILP protocols:
+
+```bash
+# Create TCP load balancer
+gcloud compute forwarding-rules create questdb-pg-rule \
+  --region=us-central1 \
+  --ports=8812 \
+  --backend-service=questdb-pg-backend
+
+gcloud compute forwarding-rules create questdb-ilp-rule \
+  --region=us-central1 \
+  --ports=9009 \
+  --backend-service=questdb-ilp-backend
+```
+
+## Cloud Storage Integration
+
+### Backup to Cloud Storage (Enterprise)
+
+Configure GCS backup in `server.conf`:
+
+```properties
+backup.enabled=true
+backup.object.store=gs::bucket=questdb-backups;root=production;project_id=my-project;
+backup.schedule.cron=0 2 * * *
+backup.compression.level=5
+```
+
+### Service Account for GCS Access
+
+```bash
+# Create service account
+gcloud iam service-accounts create questdb-backup \
+  --display-name="QuestDB Backup Service Account"
+
+# Grant Storage Object Admin role
+gcloud projects add-iam-policy-binding my-project \
+  --member="serviceAccount:questdb-backup@my-project.iam.gserviceaccount.com" \
+  --role="roles/storage.objectAdmin"
+
+# Create and download key
+gcloud iam service-accounts keys create questdb-key.json \
+  --iam-account=questdb-backup@my-project.iam.gserviceaccount.com
+```
+
+## Monitoring and Logging
+
+### Cloud Monitoring
+
+Enable monitoring:
+
+```bash
+# Install monitoring agent (Compute Engine)
+curl -sSO https://dl.google.com/cloudagents/add-google-cloud-ops-agent-repo.sh
+sudo bash add-google-cloud-ops-agent-repo.sh --also-install
+```
+
+### Cloud Logging
+
+View logs:
+
+```bash
+# View instance logs
+gcloud logging read "resource.type=gce_instance AND resource.labels.instance_id=INSTANCE_ID" \
+  --limit 50 \
+  --format json
+
+# View container logs (GKE)
+gcloud logging read "resource.type=k8s_container AND resource.labels.pod_name=questdb-0" \
+  --limit 50
+```
+
+### Custom Metrics
+
+Create custom dashboard in Cloud Monitoring:
+
+- CPU utilization
+- Memory usage
+- Disk I/O
+- Network throughput
+- QuestDB query latency
+- Ingestion rate
+
+## Security Best Practices
+
+### VPC Configuration
+
+```bash
+# Create VPC
+gcloud compute networks create questdb-vpc \
+  --subnet-mode=custom
+
+# Create subnet
+gcloud compute networks subnets create questdb-subnet \
+  --network=questdb-vpc \
+  --region=us-central1 \
+  --range=10.0.0.0/24
+
+# Create firewall rules for internal traffic only
+gcloud compute firewall-rules create questdb-internal \
+  --network=questdb-vpc \
+  --allow=tcp:9000,tcp:8812,tcp:9009 \
+  --source-ranges=10.0.0.0/24
+```
+
+### Identity and Access Management
+
+```bash
+# Create custom role
+gcloud iam roles create questdbOperator \
+  --project=my-project \
+  --title="QuestDB Operator" \
+  --permissions=compute.instances.get,compute.instances.list,storage.objects.create
+
+# Assign role to user
+gcloud projects add-iam-policy-binding my-project \
+  --member="user:operator@example.com" \
+  --role="projects/my-project/roles/questdbOperator"
+```
+
+### Encryption
+
+- Enable encryption at rest (default for persistent disks)
+- Use customer-managed encryption keys (CMEK)
+- Enable TLS for data in transit (Enterprise)
+
+## Cost Optimization
+
+### Committed Use Discounts
+
+Purchase 1-year or 3-year commitments for up to 57% savings:
+
+```bash
+gcloud compute commitments create questdb-commitment \
+  --resources=vcpu=8,memory=32GB \
+  --plan=12-month \
+  --region=us-central1
+```
+
+### Preemptible VMs
+
+Use preemptible instances for development/testing (up to 80% savings):
+
+```bash
+gcloud compute instances create questdb-dev \
+  --zone=us-central1-a \
+  --machine-type=n2-standard-4 \
+  --preemptible
+```
+
+### Persistent Disk Optimization
+
+- Use standard persistent disks for cold data
+- Use SSD persistent disks for hot data
+- Enable disk snapshots for backups
+- Delete unused disks
+
+## Troubleshooting
+
+### Check Instance Status
+
+```bash
+gcloud compute instances describe questdb-instance \
+  --zone=us-central1-a
+```
+
+### SSH into Instance
+
+```bash
+gcloud compute ssh questdb-instance --zone=us-central1-a
+```
+
+### View Docker Logs
+
+```bash
+sudo docker logs questdb -f
+```
+
+### Check Disk Usage
+
+```bash
+df -h /mnt/disks/questdb-data
+```
+
+### GKE Troubleshooting
+
+```bash
+# Check pods
+kubectl get pods
+
+# View logs
+kubectl logs questdb-0 -f
+
+# Describe pod
+kubectl describe pod questdb-0
+```
+
+## Next Steps
+
+- Explore [AWS deployment](/deployment/aws) options
+- Configure [Kubernetes](/deployment/kubernetes) best practices
+- Set up [Docker](/deployment/docker) for local development

@@ -1,0 +1,290 @@
+---
+title: Building QuestDB from Source
+description: Instructions for building QuestDB from source, including prerequisites, build commands, and platform-specific notes.
+---
+
+## Prerequisites
+
+### Required Software
+
+- **Java 17 64-bit** (strict requirement — no earlier, no later)
+- **Maven 3** (latest version recommended)
+- **Git** (to clone the repository)
+
+### Optional for C/C++ Development
+
+- **C compiler** (GCC, Clang, or MSVC)
+- **CMake 3.15+**
+- **CLion IDE** (recommended for C/C++ development)
+
+### Platform Support
+
+- **x86-64**: Windows, Linux, FreeBSD, macOS
+- **ARM64**: Linux, macOS (Apple Silicon)
+
+**Note for Apple Silicon users:** Most tests run normally on ARM64. However, JIT-related tests are x86-64 only and will be skipped. If contributing to JIT functionality, use an x86-64 machine or run an x86-64 JDK under Rosetta emulation.
+
+## Cloning the Repository
+
+```bash
+git clone https://github.com/questdb/questdb.git
+cd questdb
+```
+
+## Setting up Java
+
+### Configuring JAVA_HOME
+
+`JAVA_HOME` is required by Maven. Set it to point to Java 17:
+
+```bash
+# Linux/macOS
+export JAVA_HOME="/path/to/java/"
+
+# Windows
+set JAVA_HOME="c:\path\to\java\directory"
+```
+
+**Important:** Point to the root of the Java directory (e.g., `C:\Users\me\dev\jdk-17`), **not** the `bin` subdirectory.
+
+### Verifying Installation
+
+```bash
+java --version
+mvn --version
+```
+
+Both commands should complete successfully and show Java 17.
+
+## Building the Database
+
+### Quick Build (Java Only)
+
+Build a JAR without web console or tests (fastest option):
+
+```bash
+mvn clean package -DskipTests
+```
+
+Output: `core/target/questdb-<version>-SNAPSHOT.jar`
+
+### Build with Web Console
+
+To include the web console:
+
+```bash
+mvn clean package -DskipTests -P build-web-console
+```
+
+This packages the web console into `core/src/main/resources/io/questdb/site/public.zip`.
+
+### Build with Native Binaries
+
+To build executable binaries (includes web console):
+
+```bash
+mvn clean package -DskipTests -P build-web-console,build-binaries
+```
+
+### Build Output
+
+- **JAR file:** `core/target/questdb-<version>-SNAPSHOT.jar`
+- **Web console:** Embedded in the JAR when using `-P build-web-console`
+- **Native libraries:** `core/src/main/resources/io/questdb/bin/`
+
+## Running QuestDB
+
+After building with the web console, run QuestDB:
+
+```bash
+# Create a data directory
+mkdir <root_directory>
+
+# Run QuestDB
+java -p core/target/questdb-<version>-SNAPSHOT.jar \
+  -m io.questdb/io.questdb.ServerMain \
+  -d <root_directory>
+```
+
+The web console will be available at [http://localhost:9000](http://localhost:9000).
+
+### Using the JAR Directly
+
+If you built with `-P build-binaries`, you can also run:
+
+```bash
+java -jar core/target/questdb-<version>.jar -d <root_directory>
+```
+
+## Running Tests
+
+QuestDB has over 4,000 tests that complete within 2-6 minutes (depending on your system).
+
+### Run All Tests
+
+```bash
+mvn clean test
+```
+
+**Important:** Do not run multiple `mvn test` commands in parallel — each invocation triggers a full build and they interfere with each other. Run test commands sequentially.
+
+### Run Specific Tests
+
+```bash
+# Run a specific test class
+mvn -Dtest=ClassNameTest test
+
+# Run a specific test method
+mvn -Dtest=ClassNameTest#methodName test
+```
+
+For more details, see [Testing](/development/testing).
+
+## Building Native C/C++ Libraries
+
+QuestDB uses C/C++ for performance-critical operations (SIMD vectorization, memory management, platform-specific optimizations).
+
+### Prerequisites
+
+- C compiler (GCC, Clang, or MSVC)
+- CMake 3.15 or later
+- `JAVA_HOME` environment variable set
+
+### Build Commands
+
+```bash
+cd core
+cmake -B build/release -DCMAKE_BUILD_TYPE=Release .
+cmake --build build/release --config Release
+```
+
+### Output Location
+
+Compiled binaries are copied to:
+
+```
+core/src/main/resources/io/questdb/bin/
+```
+
+### Platform-Specific Binaries
+
+Compiled binaries (for C libraries and Windows service wrapper) are committed to git to make the development process Java-centric and simpler. You only need to recompile native code if you're modifying C/C++ sources.
+
+### IDE Setup for C/C++ Development
+
+We recommend **CLion** for C/C++ development. CLion understands CMake files and makes compilation easier.
+
+For more details, see [core/CMAKE_README.md](https://github.com/questdb/questdb/blob/master/core/CMAKE_README.md).
+
+## Developing with the Java ILP Client
+
+The QuestDB server tests use the [Java ILP client](https://github.com/questdb/java-questdb-client) for integration testing. By default, the client is resolved from Maven Central.
+
+### Setup for Local Client Development
+
+If you need to modify both the client and server simultaneously:
+
+1. Initialize the git submodule:
+
+```bash
+git submodule update --init java-questdb-client
+```
+
+2. Build with the `local-client` profile:
+
+```bash
+mvn test -P local-client
+```
+
+This builds the client from `java-questdb-client/` first, then uses the locally built client (version `1.0.1-SNAPSHOT`) for server tests.
+
+### IntelliJ IDEA Setup
+
+To work on both client and server in IntelliJ:
+
+1. Initialize the submodule (see above)
+2. Open **File > Project Structure > Modules**
+3. Click **+** (Add) > **Import Module**
+4. Select `java-questdb-client/core/pom.xml` and click **OK**
+5. Open the **Maven** tool window
+6. Expand **Profiles** and check `local-client`
+7. Click **Reload All Maven Projects** (circular arrows icon)
+
+Now IntelliJ will use your local client changes when running tests.
+
+### Workflow Tips
+
+- Make changes to both `java-questdb-client/` and `core/` as needed
+- Run tests with `-P local-client` to verify everything works together
+- Commit changes to each repository separately
+- Push client submodule changes to [java-questdb-client](https://github.com/questdb/java-questdb-client) repository
+
+## Frontend Development
+
+The web console is located in a [separate repository](https://github.com/questdb/ui/tree/main/packages/web-console). Follow the instructions in that repository for frontend development.
+
+The frontend dev environment requires a QuestDB instance running in the background:
+
+1. Run a development version from this repository (see [Running QuestDB](#running-questdb))
+2. Or run a published version with Docker (see [README](https://github.com/questdb/questdb/blob/master/README.md))
+
+## Debugging in IntelliJ IDEA
+
+We recommend using IntelliJ IDEA for development and debugging. The repository includes run configurations in the `.idea` directory that you can use to start QuestDB with a debugger attached.
+
+### Run Configurations
+
+- **ServerMain** — Starts the database with debugger
+- **Various test configurations** — Run specific test suites with debugging
+
+## Build Profiles
+
+Maven profiles control what gets built:
+
+| Profile | Description |
+|---------|-------------|
+| (none) | Java-only build, no web console |
+| `build-web-console` | Includes web console in JAR |
+| `build-binaries` | Builds executable binaries |
+| `local-client` | Uses local Java ILP client from submodule |
+| `maven-central-release` | For releasing to Maven Central (maintainers only) |
+
+## Troubleshooting
+
+### Web Console Returns 404
+
+If the server works but the UI returns 404 on [localhost:9000](http://localhost:9000), the web console artifacts are missing. Rebuild with:
+
+```bash
+mvn clean package -DskipTests -P build-web-console
+```
+
+### Tests Fail on Windows
+
+Antivirus software may interfere with tests. Common symptoms:
+- Tests pass on CI but fail locally
+- HTTP chunk size assertion failures
+- Test timeouts
+- JVM crashes
+
+For ESET products:
+- Disable "application protocol content filtering"
+- Add `127.0.0.1` to "Excluded IP addresses" in advanced settings
+
+### Maven Build Fails
+
+- Verify `JAVA_HOME` points to Java 17 (not 11, not 18)
+- Ensure `JAVA_HOME` points to the root directory, not `bin/`
+- Check Maven version: `mvn --version`
+
+### Native Library Compilation Fails
+
+- Verify CMake version: `cmake --version` (needs 3.15+)
+- Ensure C compiler is in PATH
+- Check `JAVA_HOME` is set (required for JNI headers)
+
+## Next Steps
+
+- [Testing Conventions](/development/testing)
+- [Architecture Overview](/development/architecture)
+- [Contributing Guidelines](/development/contributing)

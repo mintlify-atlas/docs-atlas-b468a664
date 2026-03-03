@@ -1,0 +1,86 @@
+---
+title: Client libraries overview
+description: Overview of QuestDB client libraries for data ingestion
+---
+
+QuestDB provides official client libraries for multiple programming languages to ingest data using the InfluxDB Line Protocol (ILP). These clients are optimized for high-throughput, low-latency ingestion.
+
+## Available clients
+
+<CardGroup cols={2}>
+  <Card title="Java" icon="java" href="/clients/java">
+    io.questdb.client.Sender for JVM applications
+  </Card>
+  <Card title="Python" icon="python" href="/clients/python">
+    questdb.ingress.Sender for Python applications
+  </Card>
+  <Card title="Node.js" icon="node-js" href="/clients/nodejs">
+    @questdb/nodejs-client for JavaScript/TypeScript
+  </Card>
+  <Card title="Go" icon="golang" href="/clients/go">
+    questdb-client-go for Go applications
+  </Card>
+  <Card title="Rust" icon="rust" href="/clients/rust">
+    questdb-rs for Rust applications
+  </Card>
+  <Card title="C/C++" icon="c" href="/clients/c-cpp">
+    line_sender API for C/C++ applications
+  </Card>
+  <Card title=".NET" icon="microsoft" href="/clients/dotnet">
+    QuestDB.Net for .NET applications
+  </Card>
+</CardGroup>
+
+## Comparison
+
+| Language | Package | Protocol | Transport | Authentication |
+|----------|---------|----------|-----------|----------------|
+| Java | io.questdb.client:questdb-client | ILP | TCP/HTTP | ✓ |
+| Python | questdb | ILP | TCP/HTTP | ✓ |
+| Node.js | @questdb/nodejs-client | ILP | TCP/HTTP | ✓ |
+| Go | github.com/questdb/go-questdb-client | ILP | TCP/HTTP | ✓ |
+| Rust | questdb-rs | ILP | TCP | ✓ |
+| C/C++ | questdb.h | ILP | TCP/HTTP | ✓ |
+| .NET | QuestDB.Net | ILP | TCP | ✓ |
+
+## Features
+
+All clients support:
+
+- **Auto-flush**: Automatic batching and flushing
+- **Error handling**: Comprehensive error reporting
+- **Type safety**: Strong typing for fields and timestamps
+- **Authentication**: Elliptic curve authentication
+- **Connection pooling**: Efficient connection management
+
+## Default configuration
+
+- **Host**: localhost
+- **Port**: 9009 (TCP), 9000 (HTTP)
+- **Auto-flush**: Enabled (varies by client)
+- **Buffer size**: 64KB-128KB (varies by client)
+
+## Choosing a client
+
+<Tabs>
+  <Tab title="High throughput">
+    Use Java or C/C++ clients for maximum performance (millions of rows/second).
+  </Tab>
+  <Tab title="Ease of use">
+    Use Python or Node.js clients for rapid development and integration.
+  </Tab>
+  <Tab title="Systems programming">
+    Use Rust or C/C++ clients for embedded systems or low-level control.
+  </Tab>
+</Tabs>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Installation" icon="download" href="/clients/python">
+    Install your preferred client library
+  </Card>
+  <Card title="ILP Reference" icon="book" href="/api/ilp/overview">
+    Learn about the InfluxDB Line Protocol
+  </Card>
+</CardGroup>

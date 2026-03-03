@@ -1,0 +1,362 @@
+---
+title: SELECT Queries
+description: SELECT statement syntax with time-series query examples.
+---
+
+The SELECT statement retrieves data from tables. QuestDB optimizes SELECT queries for time-series data with columnar storage and SIMD acceleration.
+
+## Basic SELECT
+
+```sql
+SELECT * FROM trades;
+```
+
+Select specific columns:
+
+```sql
+SELECT symbol, price, quantity, timestamp
+FROM trades;
+```
+
+## Column Aliases
+
+Use AS to create column aliases:
+
+```sql
+SELECT 
+    symbol AS ticker,
+    price * quantity AS total_value,
+    timestamp AS ts
+FROM trades;
+```
+
+## WHERE Clause
+
+Filter rows with WHERE:
+
+```sql
+SELECT symbol, price, timestamp
+FROM trades
+WHERE price > 100 AND symbol = 'AAPL';
+```
+
+### Time-Based Filtering
+
+QuestDB optimizes timestamp filtering:
+
+```sql
+SELECT symbol, price, timestamp
+FROM trades
+WHERE timestamp > '2023-01-01T00:00:00.000000Z'
+  AND timestamp < '2023-01-02T00:00:00.000000Z';
+```
+
+Use `dateadd()` for relative time ranges:
+
+```sql
+SELECT symbol, price, timestamp
+FROM trades
+WHERE timestamp > dateadd('d', -7, now());
+```
+
+**Output:**
+```
+symbol  price   timestamp
+AAPL    150.25  2023-12-28T10:30:00.000000Z
+GOOG    142.80  2023-12-28T11:15:00.000000Z
+AAPL    151.00  2023-12-28T14:20:00.000000Z
+```
+
+## ORDER BY
+
+Sort results:
+
+```sql
+SELECT symbol, price, timestamp
+FROM trades
+ORDER BY timestamp DESC;
+```
+
+Multiple sort columns:
+
+```sql
+SELECT symbol, price, timestamp
+FROM trades
+ORDER BY symbol ASC, timestamp DESC;
+```
+
+## LIMIT
+
+Restrict the number of rows:
+
+```sql
+SELECT symbol, price, timestamp
+FROM trades
+ORDER BY timestamp DESC
+LIMIT 10;
+```
+
+## DISTINCT
+
+Return unique values:
+
+```sql
+SELECT DISTINCT symbol
+FROM trades;
+```
+
+**Output:**
+```
+symbol
+AAPL
+GOOG
+MSFT
+TSLA
+```
+
+## Expressions
+
+Use expressions in SELECT:
+
+```sql
+SELECT 
+    symbol,
+    price,
+    quantity,
+    price * quantity AS total,
+    timestamp
+FROM trades;
+```
+
+**Output:**
+```
+symbol  price   quantity  total     timestamp
+AAPL    150.25  100       15025.00  2023-12-28T10:30:00.000000Z
+GOOG    142.80  50        7140.00   2023-12-28T11:15:00.000000Z
+```
+
+## Aggregate Functions
+
+Use aggregations without GROUP BY:
+
+```sql
+SELECT 
+    count() AS trade_count,
+    sum(quantity) AS total_volume,
+    avg(price) AS avg_price,
+    min(price) AS low,
+    max(price) AS high
+FROM trades
+WHERE symbol = 'AAPL';
+```
+
+**Output:**
+```
+trade_count  total_volume  avg_price  low     high
+1250         125000        150.45     148.20  152.80
+```
+
+## Subqueries
+
+Nested SELECT statements:
+
+```sql
+SELECT symbol, avg_price
+FROM (
+    SELECT symbol, avg(price) AS avg_price
+    FROM trades
+    WHERE timestamp > dateadd('d', -1, now())
+)
+WHERE avg_price > 100;
+```
+
+## CASE Expressions
+
+Conditional logic:
+
+```sql
+SELECT 
+    symbol,
+    price,
+    CASE 
+        WHEN price < 100 THEN 'low'
+        WHEN price < 200 THEN 'medium'
+        ELSE 'high'
+    END AS price_category
+FROM trades;
+```
+
+**Output:**
+```
+symbol  price   price_category
+AAPL    150.25  medium
+GOOG    95.50   low
+MSFT    250.00  high
+```
+
+## UNION
+
+Combine results from multiple queries:
+
+```sql
+SELECT symbol, price, timestamp FROM trades WHERE symbol = 'AAPL'
+UNION
+SELECT symbol, price, timestamp FROM trades WHERE symbol = 'GOOG'
+ORDER BY timestamp;
+```
+
+## Time-Series Queries
+
+### Timestamp Column
+
+QuestDB tables can have a designated timestamp column:
+
+```sql
+CREATE TABLE trades (
+    symbol SYMBOL,
+    price DOUBLE,
+    quantity LONG,
+    timestamp TIMESTAMP
+) TIMESTAMP(timestamp) PARTITION BY DAY;
+```
+
+Query with timestamp optimization:
+
+```sql
+SELECT symbol, price, quantity, timestamp
+FROM trades
+WHERE timestamp IN '2023-12-28';
+```
+
+### Date Functions
+
+Extract date parts:
+
+```sql
+SELECT 
+    symbol,
+    price,
+    year(timestamp) AS year,
+    month(timestamp) AS month,
+    day(timestamp) AS day,
+    hour(timestamp) AS hour
+FROM trades
+LIMIT 5;
+```
+
+**Output:**
+```
+symbol  price   year  month  day  hour
+AAPL    150.25  2023  12     28   10
+GOOG    142.80  2023  12     28   11
+AAPL    151.00  2023  12     28   14
+```
+
+### Interval Queries
+
+Query specific time intervals:
+
+```sql
+SELECET symbol, avg(price) AS avg_price, count() AS trade_count
+FROM trades
+WHERE timestamp > dateadd('h', -1, now())
+GROUP BY symbol;
+```
+
+## Type Casting
+
+Cast values using `::`:
+
+```sql
+SELECT 
+    x::DOUBLE AS double_value,
+    '2023-01-01'::TIMESTAMP AS ts,
+    'ABC'::SYMBOL AS sym
+FROM long_sequence(5);
+```
+
+## WITH Clause (CTE)
+
+Common Table Expressions:
+
+```sql
+WITH daily_avg AS (
+    SELECT 
+        symbol,
+        date_trunc('day', timestamp) AS day,
+        avg(price) AS avg_price
+    FROM trades
+    GROUP BY symbol, day
+)
+SELECT symbol, avg(avg_price) AS overall_avg
+FROM daily_avg
+GROUP BY symbol;
+```
+
+## Query Optimization Tips
+
+- **Filter on timestamp first**: QuestDB optimizes timestamp-based filtering
+- **Use SYMBOL for repeated strings**: SYMBOL columns are indexed and compressed
+- **Leverage partitioning**: Query specific partitions for better performance
+- **Select only needed columns**: Columnar storage makes column selection efficient
+- **Use designated timestamp**: Queries on designated timestamp columns are faster
+
+## Examples
+
+### Get Latest Price Per Symbol
+
+```sql
+SELECT symbol, price, timestamp
+FROM trades
+LATEST ON timestamp PARTITION BY symbol;
+```
+
+**Output:**
+```
+symbol  price   timestamp
+AAPL    151.00  2023-12-28T14:20:00.000000Z
+GOOG    143.50  2023-12-28T14:15:00.000000Z
+MSFT    250.25  2023-12-28T14:18:00.000000Z
+```
+
+### Aggregate by Time Bucket
+
+```sql
+SELECT 
+    timestamp,
+    symbol,
+    avg(price) AS avg_price,
+    sum(quantity) AS volume
+FROM trades
+WHERE timestamp > dateadd('d', -1, now())
+SAMPLE BY 1h
+ORDER BY timestamp DESC
+LIMIT 10;
+```
+
+**Output:**
+```
+timestamp                      symbol  avg_price  volume
+2023-12-28T14:00:00.000000Z    AAPL    151.20     15000
+2023-12-28T13:00:00.000000Z    AAPL    150.80     12500
+2023-12-28T14:00:00.000000Z    GOOG    143.40     8000
+```
+
+### Filter with Multiple Conditions
+
+```sql
+SELECT symbol, price, quantity, timestamp
+FROM trades
+WHERE 
+    timestamp > '2023-12-01T00:00:00.000000Z'
+    AND symbol IN ('AAPL', 'GOOG', 'MSFT')
+    AND price > 100
+    AND quantity > 50
+ORDER BY timestamp DESC;
+```
+
+## Next Steps
+
+- [JOIN Operations](/sql/joins) - Learn about JOIN types
+- [Time-Series Functions](/sql/time-series-functions) - Use SAMPLE BY and LATEST ON
+- [Aggregations](/sql/aggregations) - Master aggregate functions

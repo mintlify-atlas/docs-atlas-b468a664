@@ -1,0 +1,168 @@
+---
+title: "Grafana Integration"
+description: "Visualize QuestDB data with Grafana using the PostgreSQL datasource"
+---
+
+## Overview
+
+Grafana is a popular open-source analytics and visualization platform. QuestDB integrates seamlessly with Grafana through the PostgreSQL datasource, allowing you to create real-time dashboards and visualizations for your time-series data.
+
+## Prerequisites
+
+- QuestDB instance running (version 6.0 or later)
+- Grafana installed (version 8.0 or later)
+- PostgreSQL Wire Protocol enabled on QuestDB (default port: 8812)
+
+## Connection Setup
+
+### Step 1: Add PostgreSQL Datasource
+
+1. Open Grafana and navigate to **Configuration** > **Data Sources**
+2. Click **Add data source**
+3. Select **PostgreSQL** from the list
+
+### Step 2: Configure Connection
+
+Enter the following connection details:
+
+```
+Host: localhost:8812
+Database: qdb
+User: admin
+Password: quest
+SSL Mode: disable
+```
+
+<Note>
+By default, QuestDB uses port **8812** for PostgreSQL Wire Protocol connections. Adjust the host and port based on your deployment.
+</Note>
+
+### Step 3: Advanced Settings
+
+For optimal performance with time-series queries:
+
+- **Max open connections**: 100
+- **Max idle connections**: 10
+- **Max lifetime**: 3600
+
+## Creating a Dashboard
+
+### Basic Query Example
+
+Create a time-series visualization with a simple query:
+
+```sql
+SELECT 
+  timestamp as time,
+  temperature,
+  sensor_id
+FROM sensor_data
+WHERE timestamp > $__timeFrom() 
+  AND timestamp < $__timeTo()
+ORDER BY timestamp
+```
+
+### Using QuestDB Time-Series Functions
+
+Leverage QuestDB's powerful time-series extensions:
+
+```sql
+SELECT 
+  timestamp,
+  avg(price) as avg_price,
+  symbol
+FROM trades
+WHERE timestamp IN $__timeFilter(timestamp)
+SAMPLE BY 1m ALIGN TO CALENDAR
+```
+
+### Aggregation with SAMPLE BY
+
+```sql
+SELECT 
+  timestamp,
+  first(price) as open,
+  last(price) as close,
+  min(price) as low,
+  max(price) as high,
+  sum(volume) as volume
+FROM trades
+WHERE symbol = 'BTC-USD'
+  AND timestamp > $__timeFrom()
+SAMPLE BY 5m
+```
+
+## Grafana Variables
+
+Use Grafana variables for dynamic dashboards:
+
+### Query Variable
+
+```sql
+SELECT DISTINCT symbol FROM trades
+```
+
+Then use `$symbol` in your queries:
+
+```sql
+SELECT timestamp, price, volume
+FROM trades
+WHERE symbol = '$symbol'
+  AND timestamp > $__timeFrom()
+```
+
+## Performance Tips
+
+<Tip>
+- Use designated timestamps for time-series queries
+- Apply time filters to leverage partition pruning
+- Use `SAMPLE BY` for downsampling large datasets
+- Create indexes on frequently filtered columns
+</Tip>
+
+## Demo Dashboards
+
+QuestDB provides public demo dashboards:
+
+- [Real-time crypto trades](https://questdb.com/dashboards/crypto/)
+- [FX order book depth charts](https://questdb.com/dashboards/FX-orderbook/)
+
+## Native Grafana Plugin
+
+<Info>
+QuestDB offers a [Grafana-native plugin](https://questdb.com/docs/third-party-tools/grafana/) with enhanced features for time-series queries and better performance.
+</Info>
+
+## Troubleshooting
+
+### Connection Issues
+
+If you cannot connect to QuestDB:
+
+1. Verify QuestDB is running: `docker ps` or check the process
+2. Confirm port 8812 is accessible: `telnet localhost 8812`
+3. Check firewall settings if connecting remotely
+4. Review QuestDB logs for authentication errors
+
+### Query Performance
+
+If queries are slow:
+
+- Add time range filters to your WHERE clause
+- Use `SAMPLE BY` to reduce data points returned
+- Check query execution plan with `EXPLAIN`
+- Consider partitioning strategies for large tables
+
+## Next Steps
+
+<CardGroup cols={2}>
+
+<Card title="Time-Series Functions" icon="clock" href="/sql/time-series-functions">
+  Learn about QuestDB's SQL extensions
+</Card>
+
+<Card title="PostgreSQL Wire Protocol" icon="plug" href="/api/postgres/overview">
+  Explore connection options
+</Card>
+
+</CardGroup>

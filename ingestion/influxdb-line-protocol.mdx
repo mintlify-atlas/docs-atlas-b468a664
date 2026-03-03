@@ -1,0 +1,373 @@
+---
+title: InfluxDB Line Protocol (ILP)
+description: High-throughput data ingestion using InfluxDB Line Protocol over TCP, UDP, and HTTP
+---
+
+QuestDB implements the InfluxDB Line Protocol (ILP) for high-speed ingestion of time-series data. ILP is a text-based protocol that allows schema-agnostic data loading with automatic table creation.
+
+## Protocol Overview
+
+The InfluxDB Line Protocol uses a simple text format:
+
+```
+table_name,tag1=value1,tag2=value2 field1=value1,field2=value2 timestamp
+```
+
+### Format Components
+
+1. **Measurement (Table Name):** The target table
+2. **Tags (Optional):** Comma-separated key=value pairs (stored as SYMBOL columns)
+3. **Fields:** Space-separated, comma-delimited key=value pairs (table columns)
+4. **Timestamp (Optional):** Nanosecond Unix timestamp
+
+### Example
+
+```
+weather,location=london,sensor=s1 temperature=23.5,humidity=0.6 1623950000000000000
+```
+
+This creates/appends to a table `weather` with:
+- Symbol columns: `location`, `sensor`
+- Value columns: `temperature` (DOUBLE), `humidity` (DOUBLE)  
+- Timestamp column: `timestamp` (TIMESTAMP)
+
+## Transport Protocols
+
+### TCP (Recommended)
+
+TCP provides reliable, ordered delivery with optional authentication.
+
+**Default Port:** 9009
+
+**Configuration:**
+```properties
+# conf/server.conf
+line.tcp.net.bind.to=0.0.0.0:9009
+line.tcp.enabled=true
+line.tcp.auth.db.path=conf/auth.txt
+```
+
+**Example (Java):**
+```java
+import io.questdb.client.Sender;
+
+try (Sender sender = Sender.builder()
+        .address("localhost:9009")
+        .build()) {
+    sender.table("trades")
+          .symbol("symbol", "ETH-USD")
+          .doubleColumn("price", 2615.54)
+          .doubleColumn("amount", 0.00044)
+          .at(System.nanoTime());
+    sender.flush();
+}
+```
+
+**Example (Python):**
+```python
+from questdb.ingress import Sender
+
+with Sender('localhost', 9009) as sender:
+    sender.row(
+        'trades',
+        symbols={'symbol': 'ETH-USD'},
+        columns={'price': 2615.54, 'amount': 0.00044})
+    sender.flush()
+```
+
+**Example (Raw TCP):**
+```bash
+echo "trades,symbol=ETH-USD price=2615.54,amount=0.00044" | nc localhost 9009
+```
+
+### UDP
+
+UDP provides fire-and-forget ingestion with no acknowledgment.
+
+**Default Port:** 9009
+
+**Configuration:**
+```properties
+# conf/server.conf
+line.udp.bind.to=0.0.0.0:9009
+line.udp.enabled=true
+line.udp.commit.rate=1048576
+```
+
+**Example:**
+```bash
+echo "sensors,location=office temp=22.5,humidity=0.55" | nc -u localhost 9009
+```
+
+**UDP Characteristics:**
+- No connection overhead
+- No delivery guarantee
+- Limited packet size (typically 1472 bytes)
+- Best for high-frequency, non-critical metrics
+
+### HTTP
+
+HTTP/S provides cloud-native ingestion with authentication and TLS support.
+
+**Default Port:** 9000
+**Endpoints:** `/write`, `/api/v2/write`
+
+**Configuration:**
+```properties
+# conf/server.conf
+http.enabled=true
+http.net.bind.to=0.0.0.0:9000
+```
+
+**Example (curl):**
+```bash
+curl -i -X POST 'http://localhost:9000/write' \
+  -d 'trades,symbol=ETH-USD price=2615.54,amount=0.00044'
+```
+
+**Example (with timestamp):**
+```bash
+curl -i -X POST 'http://localhost:9000/write' \
+  -d 'trades,symbol=ETH-USD price=2615.54,amount=0.00044 1647625437609765000'
+```
+
+## Line Protocol Syntax
+
+### Data Types
+
+QuestDB infers column types from the field value format:
+
+| Format | Type | Example |
+|--------|------|----------|
+| `field=value` | DOUBLE | `temperature=23.5` |
+| `field=valuei` | LONG | `count=100i` |
+| `field="value"` | STRING | `name="sensor1"` |
+| `field=t` or `field=f` | BOOLEAN | `active=t` |
+| `field=value` | TIMESTAMP | In nanoseconds |
+| `tag=value` | SYMBOL | `location=london` |
+
+### Escaping
+
+- Spaces in measurement or tag keys: Use backslash `\ `
+- Commas in tag values: Use backslash `\,`
+- Equal signs in tag keys: Use backslash `\=`
+- Quotes in string values: Use backslash `\"`
+
+**Example:**
+```
+my\ table,tag\ key=tag\ value field\ key="string value" 1623950000000000000
+```
+
+### Multiple Lines
+
+Send multiple measurements separated by newlines:
+
+```
+weather,location=london temp=23.5 1623950000000000000
+weather,location=paris temp=24.1 1623950001000000000
+weather,location=berlin temp=22.8 1623950002000000000
+```
+
+## Authentication
+
+TCP connections support authentication using elliptic curve signatures.
+
+### Server Configuration
+
+1. Create `conf/auth.txt`:
+```
+testUser1	ec-p-256-sha256	fLKYEaoEb9lrn3nkwLDA-M_xnuFOdSt9y0Z7_vWSHLU	PrwR_s-w2fPrZxrYoOSaUqq9A8gDIZwrsDM3LBPbXwc
+```
+
+2. Enable in `server.conf`:
+```properties
+line.tcp.auth.db.path=conf/auth.txt
+```
+
+### Client Configuration
+
+**Java:**
+```java
+try (Sender sender = Sender.builder()
+        .address("localhost:9009")
+        .enableAuth("testUser1").authToken("private_key_here")
+        .build()) {
+    // Send data
+}
+```
+
+**Python:**
+```python
+from questdb.ingress import Sender
+
+with Sender('localhost', 9009, auth=('testUser1', 'private_key_here')) as sender:
+    # Send data
+    pass
+```
+
+## Schema Management
+
+### Auto Table Creation
+
+By default, QuestDB automatically creates tables on first insert:
+
+```properties
+line.tcp.auto.create.new.tables=true
+line.tcp.auto.create.new.columns=true
+```
+
+### Default Configuration
+
+- **Partition:** DAY
+- **Timestamp Column:** `timestamp` (TIMESTAMP type)
+- **Integer Type:** LONG
+- **Float Type:** DOUBLE
+
+### Override Defaults
+
+```properties
+line.tcp.default.partition.by=DAY
+line.tcp.default.column.type.for.integer=LONG
+line.tcp.default.column.type.for.float=DOUBLE
+```
+
+## Performance Tuning
+
+### Commit Interval
+
+Control how frequently data is committed:
+
+```properties
+line.tcp.commit.interval.default=2000  # milliseconds
+line.tcp.commit.interval.fraction=0.5
+```
+
+### Connection Limits
+
+```properties
+line.tcp.net.connection.limit=256
+line.tcp.connection.pool.initial.capacity=4
+```
+
+### Buffer Sizes
+
+```properties
+line.tcp.net.recv.buf.size=2048
+line.tcp.max.measurement.size=512
+```
+
+### Worker Threads
+
+```properties
+line.tcp.writer.worker.count=2
+line.tcp.writer.worker.affinity=
+```
+
+## Timestamp Handling
+
+### Timestamp Units
+
+QuestDB accepts timestamps in nanoseconds by default:
+
+```properties
+line.tcp.timestamp.unit=n  # n=nanos, u=micros, ms=millis, s=seconds
+```
+
+**Example:**
+```bash
+# Nanoseconds (default)
+weather temp=23.5 1623950000000000000
+
+# Microseconds (requires config change)
+weather temp=23.5 1623950000000000
+
+# No timestamp = server time
+weather temp=23.5
+```
+
+## Error Handling
+
+### Common Errors
+
+**Invalid Column Name:**
+```
+error in line 1: table: weather; invalid column name: temp"sensor
+```
+
+**Type Mismatch:**
+```
+error in line 1: table: weather, column: temp; cast error from protocol type: STRING to column type: DOUBLE
+```
+
+**Value Out of Bounds:**
+```
+error in line 1: table: weather, column: count; line protocol value: 1024 is out bounds of column type: BYTE
+```
+
+### Disconnect on Error
+
+```properties
+line.tcp.disconnect.on.error=true  # Close connection on parse error
+```
+
+## Monitoring
+
+Key metrics are available from the `/metrics` endpoint:
+
+- `questdb_ilp_tcp_ingress_rows_total` - Total rows received
+- `questdb_ilp_tcp_ingress_errors_total` - Parse errors
+- `questdb_ilp_tcp_connections` - Active connections
+
+## Complete Example
+
+**Server Setup (conf/server.conf):**
+```properties
+line.tcp.enabled=true
+line.tcp.net.bind.to=0.0.0.0:9009
+line.tcp.auto.create.new.tables=true
+line.tcp.default.partition.by=DAY
+```
+
+**Client Code (Java):**
+```java
+import io.questdb.client.Sender;
+import java.time.Instant;
+
+public class ILPExample {
+    public static void main(String[] args) {
+        try (Sender sender = Sender.builder()
+                .address("localhost:9009")
+                .build()) {
+            
+            for (int i = 0; i < 1000; i++) {
+                sender.table("sensors")
+                      .symbol("location", "office")
+                      .symbol("sensor_id", "s" + (i % 10))
+                      .doubleColumn("temperature", 20 + Math.random() * 10)
+                      .doubleColumn("humidity", 0.4 + Math.random() * 0.2)
+                      .longColumn("reading_count", i)
+                      .at(Instant.now().toEpochMilli() * 1_000_000L);
+            }
+            
+            sender.flush();
+            System.out.println("Data sent successfully");
+        }
+    }
+}
+```
+
+## Best Practices
+
+1. **Use TCP for production** - Reliable delivery with authentication
+2. **Batch multiple rows** - Send multiple measurements per flush
+3. **Use symbols for repeated values** - Tags become indexed SYMBOL columns
+4. **Specify timestamps** - Don't rely on server time for historical data
+5. **Monitor errors** - Check logs and metrics for parse failures
+6. **Use WAL tables** - Best performance for ILP ingestion
+7. **Configure commit intervals** - Balance latency vs throughput
+
+## Related Topics
+
+- [REST API](/ingestion/rest-api) - HTTP endpoints for SQL and CSV
+- [PostgreSQL Wire](/ingestion/postgres-wire) - SQL INSERT statements
+- [Configuration Reference](/configuration) - Complete server.conf options

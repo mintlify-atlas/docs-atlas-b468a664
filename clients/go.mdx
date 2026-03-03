@@ -1,0 +1,295 @@
+---
+title: Go client
+description: QuestDB Go client for high-performance data ingestion
+---
+
+The QuestDB Go client provides an idiomatic Go API for ingesting data using the InfluxDB Line Protocol.
+
+## Installation
+
+```bash
+go get github.com/questdb/go-questdb-client/v3
+```
+
+## Quick start
+
+```go
+package main
+
+import (
+    "context"
+    "fmt"
+    "time"
+
+    qdb "github.com/questdb/go-questdb-client/v3"
+)
+
+func main() {
+    ctx := context.Background()
+    
+    sender, err := qdb.LineSenderFromConf(ctx, "http::addr=localhost:9000")
+    if err != nil {
+        panic(err)
+    }
+    defer sender.Close(ctx)
+    
+    err = sender.
+        Table("trades").
+        Symbol("symbol", "ETH-USD").
+        Symbol("side", "sell").
+        Float64Column("price", 2615.54).
+        Float64Column("amount", 0.00044).
+        AtNow(ctx)
+    
+    if err != nil {
+        panic(err)
+    }
+    
+    err = sender.Flush(ctx)
+    if err != nil {
+        panic(err)
+    }
+}
+```
+
+## Configuration
+
+```go
+sender, err := qdb.LineSenderFromConf(
+    ctx,
+    "http::addr=localhost:9000;username=admin;password=quest;",
+)
+
+// Or TCP
+tcpSender, err := qdb.LineSenderFromConf(
+    ctx,
+    "tcp::addr=localhost:9009;username=admin;token=your-token;",
+)
+```
+
+### Connection string options
+
+<ParamField path="protocol" type="string">
+  `http` or `tcp`
+</ParamField>
+
+<ParamField path="addr" type="string" required>
+  Server address (host:port)
+</ParamField>
+
+<ParamField path="username" type="string">
+  Authentication username
+</ParamField>
+
+<ParamField path="password" type="string">
+  Authentication password (HTTP)
+</ParamField>
+
+<ParamField path="token" type="string">
+  Authentication token (TCP)
+</ParamField>
+
+## Data types
+
+```go
+err = sender.
+    Table("sensors").
+    Symbol("location", "warehouse-1").      // Symbol
+    Int64Column("sensor_id", 12345).        // Int64
+    Float64Column("temperature", 23.5).     // Float64
+    StringColumn("status", "active").       // String
+    BoolColumn("is_online", true).          // Boolean
+    TimestampColumn("measured_at", time.Now()).  // Timestamp
+    AtNow(ctx)
+```
+
+## Batching
+
+```go
+ctx := context.Background()
+sender, err := qdb.LineSenderFromConf(ctx, "http::addr=localhost:9000")
+if err != nil {
+    panic(err)
+}
+defer sender.Close(ctx)
+
+// Send 1000 rows
+for i := 0; i < 1000; i++ {
+    err = sender.
+        Table("metrics").
+        Symbol("host", fmt.Sprintf("server-%d", i%10)).
+        Float64Column("cpu", float64(i%100)).
+        Float64Column("memory", float64((i*2)%100)).
+        AtNow(ctx)
+    
+    if err != nil {
+        panic(err)
+    }
+}
+
+err = sender.Flush(ctx)
+if err != nil {
+    panic(err)
+}
+```
+
+## Auto-flush
+
+```go
+sender, err := qdb.LineSenderFromConf(
+    ctx,
+    "http::addr=localhost:9000;auto_flush=on;auto_flush_rows=1000;",
+)
+if err != nil {
+    panic(err)
+}
+defer sender.Close(ctx)
+
+// Automatically flushes after 1000 rows
+for i := 0; i < 5000; i++ {
+    err = sender.
+        Table("events").
+        Symbol("type", "page_view").
+        StringColumn("url", fmt.Sprintf("/page-%d", i)).
+        AtNow(ctx)
+    
+    if err != nil {
+        panic(err)
+    }
+}
+
+// Flush remaining rows
+err = sender.Flush(ctx)
+if err != nil {
+    panic(err)
+}
+```
+
+## Error handling
+
+```go
+ctx := context.Background()
+sender, err := qdb.LineSenderFromConf(ctx, "http::addr=localhost:9000")
+if err != nil {
+    log.Fatalf("Failed to create sender: %v", err)
+}
+defer sender.Close(ctx)
+
+err = sender.
+    Table("trades").
+    Symbol("symbol", "BTC-USD").
+    Float64Column("price", 50000.0).
+    AtNow(ctx)
+
+if err != nil {
+    log.Printf("Failed to write row: %v", err)
+    return
+}
+
+err = sender.Flush(ctx)
+if err != nil {
+    log.Printf("Failed to flush: %v", err)
+    return
+}
+```
+
+## Context cancellation
+
+```go
+ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+defer cancel()
+
+sender, err := qdb.LineSenderFromConf(ctx, "http::addr=localhost:9000")
+if err != nil {
+    panic(err)
+}
+defer sender.Close(ctx)
+
+err = sender.
+    Table("metrics").
+    Symbol("host", "server-1").
+    Float64Column("cpu", 45.2).
+    AtNow(ctx)
+
+if err != nil {
+    if ctx.Err() == context.DeadlineExceeded {
+        log.Println("Operation timed out")
+    }
+    panic(err)
+}
+
+err = sender.Flush(ctx)
+if err != nil {
+    panic(err)
+}
+```
+
+## Goroutine safety
+
+<Warning>
+The sender is **not** goroutine-safe. Create separate senders for concurrent goroutines.
+</Warning>
+
+```go
+func worker(ctx context.Context, id int, wg *sync.WaitGroup) {
+    defer wg.Done()
+    
+    sender, err := qdb.LineSenderFromConf(ctx, "http::addr=localhost:9000")
+    if err != nil {
+        panic(err)
+    }
+    defer sender.Close(ctx)
+    
+    for i := 0; i < 100; i++ {
+        err = sender.
+            Table("worker_metrics").
+            Symbol("worker_id", fmt.Sprintf("worker-%d", id)).
+            Int64Column("iteration", int64(i)).
+            AtNow(ctx)
+        
+        if err != nil {
+            panic(err)
+        }
+    }
+    
+    err = sender.Flush(ctx)
+    if err != nil {
+        panic(err)
+    }
+}
+
+func main() {
+    ctx := context.Background()
+    var wg sync.WaitGroup
+    
+    // Launch 10 workers, each with its own sender
+    for i := 0; i < 10; i++ {
+        wg.Add(1)
+        go worker(ctx, i, &wg)
+    }
+    
+    wg.Wait()
+}
+```
+
+## Performance tips
+
+<Tip>
+Use HTTP protocol with auto-flush for optimal throughput.
+</Tip>
+
+1. **Enable auto-flush**: Let the client handle batching
+2. **Use HTTP protocol**: Better performance for most use cases
+3. **One sender per goroutine**: Avoid mutex overhead
+4. **Context timeouts**: Prevent hanging connections
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="ILP Reference" icon="book" href="/api/ilp/overview">
+    Learn about the protocol
+  </Card>
+  <Card title="GitHub" icon="github" href="https://github.com/questdb/go-questdb-client">
+    View source code
+  </Card>
+</CardGroup>

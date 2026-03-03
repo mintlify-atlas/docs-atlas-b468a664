@@ -1,0 +1,376 @@
+---
+title: Query Endpoint
+description: Execute SQL queries using the /exec REST API endpoint
+---
+
+The `/exec` endpoint executes SQL queries and returns results as JSON.
+
+## Endpoint
+
+```
+GET /exec
+```
+
+## Query Parameters
+
+<ParamField query="query" type="string" required>
+  SQL query to execute. Must be URL-encoded.
+</ParamField>
+
+<ParamField query="limit" type="string">
+  Limit the number of rows returned. Format: `limit` or `skip,limit`.
+  
+  Examples:
+  - `limit=100` - return first 100 rows
+  - `limit=50,100` - skip 50 rows, return next 100
+  
+  Maximum controlled by `http.json.query.max.response.rows` (default: 10,000).
+</ParamField>
+
+<ParamField query="count" type="boolean" default="false">
+  When `true`, only count rows without returning data. Response includes `count` field.
+</ParamField>
+
+<ParamField query="nm" type="boolean" default="false">
+  When `true`, exclude column metadata from response (no meta).
+</ParamField>
+
+<ParamField query="timings" type="boolean" default="false">
+  When `true`, include query execution timings in response.
+</ParamField>
+
+<ParamField query="explain" type="boolean" default="false">
+  When `true`, return query execution plan instead of results.
+</ParamField>
+
+<ParamField query="quoteLargeNum" type="boolean" default="false">
+  When `true`, quote large numbers (LONG256) as strings to prevent precision loss in JSON.
+</ParamField>
+
+<ParamField query="cols" type="string">
+  Comma-separated list of column names to return. Returns only specified columns.
+  
+  Example: `cols=timestamp,sensor_id,temperature`
+</ParamField>
+
+## Request Headers
+
+<ParamField header="Statement-Timeout" type="integer">
+  Query timeout in milliseconds. Query is cancelled if it exceeds this duration.
+  
+  Example: `30000` (30 seconds)
+</ParamField>
+
+<ParamField header="Authorization" type="string">
+  HTTP Basic authentication credentials (if authentication is enabled).
+  
+  Format: `Basic base64(username:password)`
+</ParamField>
+
+## Response
+
+<ResponseField name="query" type="string">
+  The executed SQL query.
+</ResponseField>
+
+<ResponseField name="columns" type="array">
+  Array of column metadata objects (omitted if `nm=true`).
+  
+  <Expandable title="Column Object">
+    <ResponseField name="name" type="string">
+      Column name.
+    </ResponseField>
+    
+    <ResponseField name="type" type="string">
+      Column data type (e.g., `TIMESTAMP`, `SYMBOL`, `DOUBLE`, `LONG`, `STRING`).
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="dataset" type="array">
+  Array of row arrays containing query results. Each row is an array of values matching the column order.
+</ResponseField>
+
+<ResponseField name="count" type="integer">
+  Number of rows returned (or total count if `count=true`).
+</ResponseField>
+
+<ResponseField name="timings" type="object">
+  Query execution timings in milliseconds (only if `timings=true`).
+  
+  <Expandable title="Timings Object">
+    <ResponseField name="compiler" type="number">
+      Time spent compiling the query.
+    </ResponseField>
+    
+    <ResponseField name="execute" type="number">
+      Time spent executing the query.
+    </ResponseField>
+    
+    <ResponseField name="count" type="integer">
+      Number of rows processed.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="explain" type="object">
+  Query execution plan (only if `explain=true`).
+</ResponseField>
+
+## Error Response
+
+<ResponseField name="query" type="string">
+  The attempted SQL query.
+</ResponseField>
+
+<ResponseField name="error" type="string">
+  Error message describing what went wrong.
+</ResponseField>
+
+<ResponseField name="position" type="integer">
+  Character position in the query where the error occurred.
+</ResponseField>
+
+## Examples
+
+### Basic SELECT Query
+
+```bash
+curl "http://localhost:9000/exec?query=SELECT+*+FROM+sensors+LIMIT+5"
+```
+
+<ResponseExample>
+```json Response
+{
+  "query": "SELECT * FROM sensors LIMIT 5",
+  "columns": [
+    {"name": "timestamp", "type": "TIMESTAMP"},
+    {"name": "sensor_id", "type": "SYMBOL"},
+    {"name": "temperature", "type": "DOUBLE"},
+    {"name": "humidity", "type": "DOUBLE"}
+  ],
+  "dataset": [
+    ["2024-01-01T00:00:00.000000Z", "sensor_1", 23.5, 45.2],
+    ["2024-01-01T00:01:00.000000Z", "sensor_2", 24.1, 46.8],
+    ["2024-01-01T00:02:00.000000Z", "sensor_1", 23.8, 45.5],
+    ["2024-01-01T00:03:00.000000Z", "sensor_3", 22.9, 44.1],
+    ["2024-01-01T00:04:00.000000Z", "sensor_2", 24.3, 47.2]
+  ],
+  "count": 5
+}
+```
+</ResponseExample>
+
+### Query with Pagination
+
+Skip the first 100 rows and return the next 50:
+
+```bash
+curl "http://localhost:9000/exec?query=SELECT+*+FROM+sensors&limit=100,50"
+```
+
+### Count Only
+
+Get row count without fetching data:
+
+```bash
+curl "http://localhost:9000/exec?query=SELECT+*+FROM+sensors&count=true"
+```
+
+<ResponseExample>
+```json Response
+{
+  "query": "SELECT * FROM sensors",
+  "count": 1000000
+}
+```
+</ResponseExample>
+
+### Query with Timings
+
+```bash
+curl "http://localhost:9000/exec?query=SELECT+avg(temperature)+FROM+sensors&timings=true"
+```
+
+<ResponseExample>
+```json Response
+{
+  "query": "SELECT avg(temperature) FROM sensors",
+  "columns": [
+    {"name": "avg", "type": "DOUBLE"}
+  ],
+  "dataset": [
+    [23.756]
+  ],
+  "count": 1,
+  "timings": {
+    "compiler": 0.234,
+    "execute": 1.567,
+    "count": 1000000
+  }
+}
+```
+</ResponseExample>
+
+### INSERT Statement
+
+```bash
+curl "http://localhost:9000/exec?query=INSERT+INTO+sensors+VALUES('2024-01-01T12:00:00.000000Z','sensor_4',25.5,48.0)"
+```
+
+<ResponseExample>
+```json Response
+{
+  "ddl": "OK"
+}
+```
+</ResponseExample>
+
+### CREATE TABLE
+
+```bash
+curl -G "http://localhost:9000/exec" \
+  --data-urlencode "query=CREATE TABLE my_table (timestamp TIMESTAMP, value DOUBLE) timestamp(timestamp) PARTITION BY DAY"
+```
+
+<ResponseExample>
+```json Response
+{
+  "ddl": "OK"
+}
+```
+</ResponseExample>
+
+### Query with Timeout
+
+```bash
+curl -H "Statement-Timeout: 5000" \
+  "http://localhost:9000/exec?query=SELECT+*+FROM+large_table"
+```
+
+### Select Specific Columns
+
+```bash
+curl "http://localhost:9000/exec?query=SELECT+*+FROM+sensors&cols=timestamp,temperature"
+```
+
+<ResponseExample>
+```json Response
+{
+  "query": "SELECT * FROM sensors",
+  "columns": [
+    {"name": "timestamp", "type": "TIMESTAMP"},
+    {"name": "temperature", "type": "DOUBLE"}
+  ],
+  "dataset": [
+    ["2024-01-01T00:00:00.000000Z", 23.5],
+    ["2024-01-01T00:01:00.000000Z", 24.1]
+  ],
+  "count": 2
+}
+```
+</ResponseExample>
+
+## Error Examples
+
+### Syntax Error
+
+```bash
+curl "http://localhost:9000/exec?query=SELCT+*+FROM+sensors"
+```
+
+<ResponseExample>
+```json Response (400)
+{
+  "query": "SELCT * FROM sensors",
+  "error": "'from' expected",
+  "position": 0
+}
+```
+</ResponseExample>
+
+### Table Not Found
+
+```bash
+curl "http://localhost:9000/exec?query=SELECT+*+FROM+nonexistent"
+```
+
+<ResponseExample>
+```json Response (400)
+{
+  "query": "SELECT * FROM nonexistent",
+  "error": "table does not exist [table=nonexistent]",
+  "position": 14
+}
+```
+</ResponseExample>
+
+### Query Timeout
+
+```bash
+curl -H "Statement-Timeout: 100" \
+  "http://localhost:9000/exec?query=SELECT+*+FROM+huge_table"
+```
+
+<ResponseExample>
+```json Response (400)
+{
+  "query": "SELECT * FROM huge_table",
+  "error": "Query timeout. Please add HTTP header 'Statement-Timeout' with timeout in ms [timeout=100ms]",
+  "position": 0
+}
+```
+</ResponseExample>
+
+## Supported SQL Operations
+
+The `/exec` endpoint supports all SQL operations:
+
+- **SELECT** - Query data
+- **INSERT** - Insert rows
+- **UPDATE** - Update rows (with conditions)
+- **CREATE TABLE** - Create new tables
+- **ALTER TABLE** - Modify table structure
+- **DROP** - Drop tables or columns
+- **TRUNCATE** - Remove all rows from a table
+- **COPY** - Not supported over REST (use PostgreSQL wire protocol)
+
+## Data Types
+
+Column types in the response:
+
+| Type | JSON Representation | Example |
+|------|---------------------|----------|
+| `BOOLEAN` | boolean | `true` |
+| `BYTE` | number | `127` |
+| `SHORT` | number | `32767` |
+| `INT` | number | `2147483647` |
+| `LONG` | number | `9223372036854775807` |
+| `FLOAT` | number | `3.14` |
+| `DOUBLE` | number | `3.141592653589793` |
+| `STRING` | string | `"hello"` |
+| `SYMBOL` | string | `"BTCUSD"` |
+| `TIMESTAMP` | string (ISO 8601) | `"2024-01-01T00:00:00.000000Z"` |
+| `DATE` | string (ISO 8601) | `"2024-01-01"` |
+| `UUID` | string | `"a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11"` |
+| `LONG256` | string (hex) | `"0x123abc..."` |
+| `GEOHASH` | string | `"sp052w"` |
+| `BINARY` | null | `null` |
+
+## Best Practices
+
+<Tip>
+  Use the `limit` parameter to control response size. The default maximum is 10,000 rows.
+</Tip>
+
+<Tip>
+  Enable `timings=true` during development to optimize query performance.
+</Tip>
+
+<Warning>
+  Always URL-encode query parameters. Use `-G --data-urlencode` with curl or equivalent in your HTTP library.
+</Warning>
+
+<Info>
+  The query cache improves performance for repeated queries. Queries with sensitive information (e.g., passwords) are not cached.
+</Info>

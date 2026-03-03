@@ -1,0 +1,389 @@
+---
+title: Testing Conventions
+description: Testing guidelines, conventions, and best practices for QuestDB development.
+---
+
+## Overview
+
+QuestDB has over 4,000 tests, most of which are integration tests that start a server, interact with it, and assert outcomes. All contributions must include comprehensive tests.
+
+## Running Tests
+
+### Basic Test Commands
+
+```bash
+# Run all tests
+mvn test
+
+# Run a specific test class
+mvn -Dtest=ClassNameTest test
+
+# Run a specific test method
+mvn -Dtest=ClassNameTest#methodName test
+```
+
+**Important:** Do not run multiple `mvn test` commands in parallel — each invocation triggers a full build and they interfere with each other. Run test commands sequentially.
+
+### Test Execution Time
+
+The full test suite completes within 2-6 minutes depending on your system. This includes:
+- Unit tests
+- Integration tests
+- SQL correctness tests
+- Protocol tests (ILP, PostgreSQL wire, HTTP)
+- Memory leak detection tests
+
+## Test Structure Requirements
+
+### Memory Leak Detection
+
+All tests must use `assertMemoryLeak()` unless they are narrow unit tests that provably don't allocate any native memory.
+
+```java
+@Test
+public void testTableWriter() throws Exception {
+    assertMemoryLeak(() -> {
+        // Your test code here
+    });
+}
+```
+
+**Why:** QuestDB uses off-heap memory extensively. Memory leaks are a critical concern. `assertMemoryLeak()` verifies that all native memory allocated during the test is properly freed.
+
+### Resource Cleanup
+
+Resource leaks are a pain point in QuestDB. Always:
+- Think carefully about all possible code paths, especially error paths
+- Write tests that ensure correct resource cleanup on each path
+- Test failure scenarios (e.g., disk full, invalid input, network errors)
+- Verify that resources are released in finally blocks or try-with-resources
+
+## SQL Test Conventions
+
+### Query Assertions
+
+Use `assertQueryNoLeakCheck()` to assert query results:
+
+```java
+assertQueryNoLeakCheck(
+    "column1\tcolumn2\n" +
+    "value1\tvalue2\n",
+    "SELECT column1, column2 FROM table",
+    null,
+    true,
+    true
+);
+```
+
+### DDL Execution
+
+Use `execute()` for non-queries (DDL statements):
+
+```java
+execute("CREATE TABLE my_table (ts TIMESTAMP, value INT) timestamp(ts)");
+```
+
+### SQL Style Guidelines
+
+1. **Use UPPERCASE for SQL keywords:**
+
+```java
+// Good
+execute("CREATE TABLE trades (ts TIMESTAMP, symbol SYMBOL, price DOUBLE) timestamp(ts)");
+
+// Bad
+execute("create table trades (ts timestamp, symbol symbol, price double) timestamp(ts)");
+```
+
+2. **Use a single INSERT statement for multiple rows:**
+
+```java
+// Good
+execute(
+    "INSERT INTO trades VALUES" +
+    "('2024-01-01T00:00:00.000000Z', 'AAPL', 150.0)," +
+    "('2024-01-01T00:00:01.000000Z', 'AAPL', 150.5)," +
+    "('2024-01-01T00:00:02.000000Z', 'GOOGL', 2800.0)"
+);
+
+// Bad - multiple INSERT statements
+execute("INSERT INTO trades VALUES ('2024-01-01T00:00:00.000000Z', 'AAPL', 150.0)");
+execute("INSERT INTO trades VALUES ('2024-01-01T00:00:01.000000Z', 'AAPL', 150.5)");
+```
+
+3. **Use multiline strings for longer statements:**
+
+```java
+assertQueryNoLeakCheck(
+    "ts\tsymbol\tprice\n" +
+    "2024-01-01T00:00:00.000000Z\tAAPL\t150.0\n" +
+    "2024-01-01T00:00:01.000000Z\tAAPL\t150.5\n",
+    """       
+        SELECT ts, symbol, price
+        FROM trades
+        WHERE symbol = 'AAPL'
+        ORDER BY ts
+    """,
+    "ts",
+    true,
+    true
+);
+```
+
+4. **Use underscore to separate thousands in numbers with 5+ digits:**
+
+```java
+// Good
+long count = 1_000_000;
+long rows = 50_000;
+
+// Bad
+long count = 1000000;
+long rows = 50000;
+```
+
+**Note:** QuestDB SQL supports underscores as thousands separators: `SELECT * FROM table WHERE value > 1_000_000`. The `Numbers.parseInt()` / `parseLong()` methods already support underscore separators.
+
+## QuestDB SQL Dialect Notes
+
+When writing tests, be aware of QuestDB's SQL dialect:
+
+### Type Casting
+
+QuestDB supports `expr::TYPE` syntax. Prefer it to `CAST(expr, type)`:
+
+```java
+// Good
+assertQuery("SELECT price::INT FROM trades");
+
+// Less idiomatic
+assertQuery("SELECT CAST(price, INT) FROM trades");
+```
+
+### Arrays
+
+QuestDB supports multidimensional arrays. Dimensionality is encoded in the column type:
+
+```java
+execute("CREATE TABLE arrays (doubles DOUBLE[], matrix DOUBLE[][])");
+// DOUBLE[] and DOUBLE[][] are distinct types
+```
+
+### No DELETE Statement
+
+QuestDB does not support `DELETE`. Rows can only be soft-deleted through application logic (e.g., a `deleted BOOLEAN` column).
+
+QuestDB does support `ALTER TABLE DROP PARTITION` for mass data deletion:
+
+```java
+execute("ALTER TABLE trades DROP PARTITION LIST '2024-01-01'");
+```
+
+### Underscores in Numeric Literals
+
+Always use underscores in numbers with 5+ digits in test code and implementation:
+
+```sql
+SELECT * FROM trades WHERE volume > 1_000_000
+```
+
+## Test Naming Conventions
+
+### Test Class Names
+
+Test classes should end with `Test`:
+
+```java
+public class TableWriterTest { }
+public class SqlCompilerTest { }
+```
+
+### Test Method Names
+
+Use descriptive names that explain what is being tested:
+
+```java
+@Test
+public void testInsertOutOfOrderData() { }
+
+@Test
+public void testCreateTableWithTimestamp() { }
+
+@Test
+public void testSelectWithWhereClause() { }
+```
+
+## Performance Testing
+
+For changes that may impact performance:
+
+1. **Benchmark before and after your changes**
+2. **Use row generator functions** to create large datasets:
+
+```sql
+CREATE TABLE perf_test AS (
+    SELECT
+        x AS id,
+        timestamp_sequence(0, 1000000) AS ts,
+        rnd_double() AS value
+    FROM long_sequence(10_000_000)
+);
+```
+
+3. **Include performance data in PR:**
+   - Data volume tested (e.g., "10M rows")
+   - Before/after timings
+   - Hardware specs (CPU, RAM)
+   - Any tradeoffs or regressions observed
+
+## Testing Best Practices
+
+### Test Error Paths
+
+Don't just test the happy path. Test error conditions:
+
+```java
+@Test
+public void testInsertInvalidTimestamp() throws Exception {
+    assertMemoryLeak(() -> {
+        execute("CREATE TABLE trades (ts TIMESTAMP, price DOUBLE) timestamp(ts)");
+        
+        try {
+            execute("INSERT INTO trades VALUES ('invalid', 100.0)");
+            Assert.fail("Expected exception");
+        } catch (SqlException e) {
+            TestUtils.assertContains(e.getFlyweightMessage(), "Invalid timestamp");
+        }
+    });
+}
+```
+
+### Test Null Handling
+
+Always consider NULL behavior when dealing with column data, expression results, and SQL statements:
+
+```java
+@Test
+public void testNullValues() throws Exception {
+    assertMemoryLeak(() -> {
+        execute("CREATE TABLE nulls (id INT, value INT)");
+        execute("INSERT INTO nulls VALUES (1, null), (2, 100)");
+        
+        assertQueryNoLeakCheck(
+            "id\tvalue\n" +
+            "1\tNaN\n" +  // INT NULL displays as NaN
+            "2\t100\n",
+            "SELECT id, value FROM nulls",
+            null,
+            true,
+            true
+        );
+    });
+}
+```
+
+**Distinguish:**
+- NULL as a sentinel value ("not initialized yet")
+- NULL as an actual SQL NULL value
+
+### Test Concurrent Access
+
+For writer/reader code, test concurrent access patterns:
+
+```java
+@Test
+public void testConcurrentReaderWriter() throws Exception {
+    assertMemoryLeak(() -> {
+        // Create writer thread
+        // Create reader threads
+        // Verify readers see consistent data
+        // Verify no deadlocks or race conditions
+    });
+}
+```
+
+### Test Resource Limits
+
+Test behavior under resource constraints:
+
+```java
+@Test
+public void testDiskFull() throws Exception {
+    // Mock file system to simulate disk full
+    // Verify graceful handling
+    // Verify cleanup on failure
+}
+```
+
+## Common Test Utilities
+
+### TestUtils
+
+The `TestUtils` class provides common assertions:
+
+```java
+TestUtils.assertContains(message, "expected substring");
+TestUtils.assertEquals(expected, actual);
+TestUtils.assertMemoryLeak(() -> { /* test code */ });
+```
+
+### Creating Test Data
+
+Use QuestDB's row generator functions:
+
+```sql
+-- Generate sequence of longs
+SELECT * FROM long_sequence(1000);
+
+-- Generate timestamps
+SELECT timestamp_sequence(0, 1000000) FROM long_sequence(100);
+
+-- Generate random data
+SELECT 
+    rnd_symbol('A', 'B', 'C') AS symbol,
+    rnd_double() AS price,
+    rnd_int(1, 1000, 0) AS volume
+FROM long_sequence(1000);
+```
+
+## Test Organization
+
+Tests are organized by component:
+
+```
+core/src/test/java/io/questdb/
+├── cairo/          # Storage engine tests
+├── griffin/        # SQL compiler and execution tests
+├── cutlass/
+│   ├── http/       # HTTP API tests
+│   ├── line/       # ILP tests
+│   └── pgwire/     # PostgreSQL wire protocol tests
+├── std/            # Utility and collection tests
+└── ...             # Other component tests
+```
+
+## Continuous Integration
+
+All tests run on CI for every PR:
+- Multiple OS: Linux, Windows, macOS
+- Multiple Java versions: Java 17 on all platforms
+- Different architectures: x86-64, ARM64 (where applicable)
+
+**Your responsibility:** Monitor your PR's CI status. We will not always remind you. PRs with failing CI for more than 2 weeks will be closed.
+
+## Error Position Convention
+
+When throwing `SqlException`, the position should point to the specific offending character, not the start of the expression:
+
+```java
+// Good
+throw SqlException.$(position, "Invalid column name");
+
+// Position points to the actual error location in the SQL string
+```
+
+## Related Pages
+
+- [Contributing Guidelines](/development/contributing)
+- [Building from Source](/development/building)
+- [Architecture Overview](/development/architecture)

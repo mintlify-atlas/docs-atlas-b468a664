@@ -1,0 +1,560 @@
+---
+title: Configuration Reference
+description: Complete server.conf configuration options for QuestDB
+---
+
+## Overview
+
+QuestDB is configured via the `server.conf` file located in the `conf` directory of your QuestDB installation. Configuration changes require a server restart unless explicitly noted.
+
+## Configuration File Location
+
+By default, QuestDB looks for `server.conf` in:
+- `<root_directory>/conf/server.conf`
+- Environment-specific path via `-d` flag when starting QuestDB
+
+## Configuration Validation
+
+```properties
+# Enforce strict configuration validation
+config.validation.strict=true
+```
+
+When set to `true`, QuestDB will fail to start if the configuration contains errors. Set to `false` to allow startup with warnings.
+
+## Thread Pools
+
+### Shared Worker Pools
+
+QuestDB uses three shared thread pools for different workloads:
+
+```properties
+# Network thread pool for HTTP, TCP, UDP, and Postgres connections
+shared.network.worker.count=2
+shared.network.worker.affinity=
+
+# Query thread pool for parallel query execution
+shared.query.worker.count=2
+shared.query.worker.affinity=
+
+# Write thread pool for WAL apply operations
+shared.write.worker.count=2
+shared.write.worker.affinity=
+
+# Configure all three pools with a single value
+shared.worker.count=2
+
+# Stop workers on errors (useful for debugging)
+shared.worker.haltOnError=false
+```
+
+**CPU Affinity**: Specify comma-delimited CPU IDs to pin threads to specific cores. Example: `0,1,2,3`
+
+## Memory Management
+
+### RAM Usage Limits
+
+```properties
+# RAM limit as percentage of total system RAM (0-100)
+ram.usage.limit.percent=90
+
+# RAM limit in bytes (0 = no limit)
+ram.usage.limit.bytes=0
+```
+
+If both limits are set, the **lower value takes precedence**.
+
+### Memory Page Sizes
+
+```properties
+# Data append operations (per column)
+cairo.writer.data.append.page.size=16M
+
+# Small metadata files (_txn, _todo, _meta)
+cairo.writer.misc.append.page.size=4k
+
+# Index key data
+cairo.writer.data.index.key.append.page.size=512k
+
+# Index value data (row IDs)
+cairo.writer.data.index.value.append.page.size=16M
+
+# System tables (smaller page sizes)
+cairo.system.writer.data.append.page.size=256k
+```
+
+### WAL Memory Configuration
+
+```properties
+# WAL data append page size
+cairo.wal.writer.data.append.page.size=1M
+
+# WAL event append page size
+cairo.wal.writer.event.append.page.size=128k
+
+# Memory advise mode: none, sequential, random
+cairo.wal.writer.madvise.mode=none
+```
+
+## Storage Configuration
+
+### Database Root Directory
+
+```properties
+# Directory for storing tables and metadata
+cairo.root=db
+```
+
+This path is relative to the server root directory specified at startup.
+
+### Commit Modes
+
+```properties
+# How changes are flushed to disk: nosync, async, sync
+cairo.commit.mode=nosync
+
+# Transaction compounding latency
+cairo.commit.latency=30s
+```
+
+- **nosync**: No explicit sync, fastest but least durable
+- **async**: Flush scheduled asynchronously, returns immediately
+- **sync**: Waits for flush to complete, slowest but most durable
+
+### Volumes
+
+```properties
+# Define storage volumes for table distribution
+# Format: alias1->path1,alias2->path2
+cairo.volumes=fast->/mnt/nvme,archive->/mnt/hdd
+```
+
+Use with `CREATE TABLE ... IN VOLUME 'alias'` to place tables on specific storage.
+
+### File Operations
+
+```properties
+# Retry count for file operations
+cairo.file.operation.retry.count=30
+
+# Maximum file name length (affects table/column names)
+cairo.max.file.name.length=127
+
+# Directory permissions (Unix octal)
+cairo.mkdir.mode=509
+```
+
+## Symbol Configuration
+
+### Symbol Capacity
+
+```properties
+# Default capacity for SYMBOL columns (must be power of 2)
+cairo.default.symbol.capacity=256
+
+# Cache symbol values on Java heap
+cairo.default.symbol.cache.flag=false
+
+# Auto-scale symbol capacity as table grows
+cairo.auto.scale.symbol.capacity=true
+
+# Occupancy threshold before capacity doubles (0.0-1.0)
+cairo.auto.scale.symbol.capacity.threshold=0.8
+```
+
+### Symbol Table Allocation
+
+```properties
+# Min/max page sizes for symbol table files
+cairo.symbol.table.min.allocation.page.size=4k
+cairo.symbol.table.max.allocation.page.size=8M
+```
+
+## Out-of-Order (O3) Ingestion
+
+### Lag Configuration
+
+```properties
+# Maximum lag buffer in microseconds
+cairo.o3.max.lag=600000
+
+# Minimum lag buffer in microseconds
+cairo.o3.min.lag=1s
+
+# Maximum uncommitted rows before flush
+cairo.max.uncommitted.rows=500000
+```
+
+### O3 Memory
+
+```properties
+# Memory per column for O3 operations (uses 2x per column)
+cairo.o3.column.memory.size=8M
+
+# O3 memory for system tables
+cairo.system.o3.column.memory.size=256k
+```
+
+### O3 Partitioning
+
+```properties
+# Minimum partition size for O3 split
+cairo.o3.partition.split.min.size=50M
+
+# Maximum splits allowed for last partition
+cairo.o3.last.partition.max.splits=20
+```
+
+## SQL Execution
+
+### Query Timeout
+
+```properties
+# Max execution time for read-only queries
+query.timeout=1m
+
+# Circuit breaker throttle (iterations before checking abort)
+circuit.breaker.throttle=2000000
+```
+
+### Query Cache
+
+```properties
+# Enable query result caching
+http.query.cache.enabled=true
+
+# Cache size: blocks × rows
+http.query.cache.block.count=8
+http.query.cache.row.count=2
+```
+
+### Parallel Execution
+
+```properties
+# Enable parallel filter execution and JIT
+cairo.sql.parallel.filter.enabled=true
+
+# Enable parallel GROUP BY
+cairo.sql.parallel.groupby.enabled=true
+
+# Enable parallel ORDER BY + LIMIT
+cairo.sql.parallel.topk.enabled=true
+
+# GROUP BY sharding threshold (rows)
+cairo.sql.parallel.groupby.sharding.threshold=10000
+```
+
+### JIT Compilation
+
+```properties
+# JIT mode: on (vectorized), scalar, off
+cairo.sql.jit.mode=on
+
+# Debug flag (prints assembly to stdout)
+cairo.sql.jit.debug.enabled=false
+```
+
+### Map and Sort Configuration
+
+```properties
+# Hash map capacity and sizing
+cairo.sql.map.key.capacity=2097152
+cairo.sql.map.page.size=4m
+cairo.sql.map.max.resizes=2147483647
+
+# Small maps for SAMPLE BY
+cairo.sql.small.map.key.capacity=32
+cairo.sql.small.map.page.size=32k
+
+# Sort memory
+cairo.sql.sort.key.page.size=128k
+cairo.sql.sort.value.page.size=16777216
+```
+
+## HTTP Server
+
+### HTTP Endpoint Configuration
+
+```properties
+# Enable HTTP server
+http.enabled=true
+
+# Bind address and port
+http.net.bind.to=0.0.0.0:9000
+
+# Connection limits
+http.net.connection.limit=256
+http.net.connection.timeout=5m
+
+# Connection queue timeout
+http.net.connection.queue.timeout=5000
+```
+
+### HTTP Authentication
+
+```properties
+# Basic authentication (comment out to disable)
+http.user=admin
+http.password=quest
+```
+
+### HTTP Context Paths
+
+```properties
+# Web Console
+http.context.web.console=/
+
+# SQL execution
+http.context.execute=/exec
+
+# CSV export
+http.context.export=/exp
+
+# File import
+http.context.import=/imp
+
+# ILP over HTTP
+http.context.ilp=/write,/api/v2/write
+```
+
+### HTTP Worker Pool
+
+```properties
+# Dedicated HTTP workers (0 = use shared pool)
+http.worker.count=0
+http.worker.affinity=
+http.worker.haltOnError=false
+```
+
+### HTTP MIN Server (Health Checks)
+
+```properties
+# Lightweight health check endpoint
+http.min.enabled=true
+http.min.net.bind.to=0.0.0.0:9003
+
+# Pessimistic health check (returns 500 on any errors)
+http.pessimistic.health.check.enabled=false
+```
+
+## PostgreSQL Wire Protocol
+
+```properties
+# Enable Postgres wire protocol
+pg.enabled=true
+pg.net.bind.to=0.0.0.0:8812
+
+# Connection limits and timeouts
+pg.net.connection.limit=64
+pg.net.connection.timeout=300000
+
+# Authentication
+pg.user=admin
+pg.password=quest
+
+# Read-only user
+pg.readonly.user.enabled=false
+pg.readonly.user=user
+pg.readonly.password=quest
+
+# Query cache
+pg.select.cache.enabled=true
+pg.select.cache.block.count=8
+pg.select.cache.row.count=2
+
+# Worker pool
+pg.worker.count=2
+pg.worker.affinity=-1,-1
+```
+
+## InfluxDB Line Protocol (ILP)
+
+### ILP TCP
+
+```properties
+line.tcp.enabled=true
+line.tcp.net.bind.to=0.0.0.0:9009
+line.tcp.net.connection.limit=256
+line.tcp.net.connection.timeout=0
+
+# Buffer sizes
+line.tcp.msg.buffer.size=2048
+line.tcp.max.measurement.size=2048
+
+# Auto-create tables and columns
+line.auto.create.new.tables=true
+line.auto.create.new.columns=true
+
+# Commit intervals
+line.tcp.commit.interval.fraction=0.5
+line.tcp.commit.interval.default=2000
+
+# Maintenance
+line.tcp.maintenance.job.interval=1000
+line.tcp.min.idle.ms.before.writer.release=500
+```
+
+### ILP UDP
+
+```properties
+line.udp.enabled=false
+line.udp.bind.to=0.0.0.0:9009
+line.udp.commit.rate=1000000
+line.udp.receive.buffer.size=8m
+```
+
+### ILP HTTP
+
+```properties
+line.http.enabled=true
+```
+
+## WAL Configuration
+
+```properties
+# Enable WAL support
+cairo.wal.supported=true
+
+# Default mode for new tables
+cairo.wal.enabled.default=true
+
+# WAL apply workers (0 = use shared pool)
+wal.apply.worker.count=0
+wal.apply.worker.affinity=
+
+# WAL purge interval
+cairo.wal.purge.interval=30s
+
+# Segment rollover
+cairo.wal.segment.rollover.row.count=200000
+cairo.wal.segment.rollover.size=0
+
+# WAL lag management
+cairo.wal.max.lag.size=75M
+cairo.wal.max.lag.txn.count=-1
+cairo.wal.squash.uncommitted.rows.multiplier=20.0
+```
+
+## Telemetry and Metrics
+
+### Telemetry
+
+```properties
+# Enable telemetry (anonymous usage data)
+telemetry.enabled=true
+telemetry.queue.capacity=512
+telemetry.hide.tables=true
+```
+
+### Metrics
+
+```properties
+# Enable Prometheus metrics endpoint
+metrics.enabled=false
+```
+
+### Query Tracing
+
+```properties
+# Enable query execution tracing
+query.tracing.enabled=false
+```
+
+## Logging
+
+```properties
+# Log query execution start
+log.sql.query.progress.exe=true
+```
+
+## Enterprise Features
+
+### Access Control Lists (ACL)
+
+```properties
+acl.enabled=false
+acl.admin.user.enabled=true
+acl.admin.user=admin
+acl.admin.password=quest
+```
+
+### TLS/SSL
+
+```properties
+# Global TLS settings
+tls.enabled=false
+tls.cert.path=
+tls.private.key.path=
+
+# HTTP TLS
+http.tls.enabled=false
+http.tls.cert.path=
+http.tls.private.key.path=
+
+# PostgreSQL TLS
+pg.tls.enabled=false
+pg.tls.cert.path=
+pg.tls.private.key.path=
+
+# ILP TCP TLS
+line.tcp.tls.enabled=false
+line.tcp.tls.cert.path=
+line.tcp.tls.private.key.path=
+```
+
+### Cold Storage
+
+```properties
+cold.storage.enabled=false
+cold.storage.object.store=
+```
+
+## Advanced Settings
+
+### Indexing
+
+```properties
+# Enable parallel indexing
+cairo.parallel.indexing.enabled=true
+
+# Minimum rows before parallel indexing
+cairo.parallel.index.threshold=100000
+
+# Index block size (must be power of 2)
+cairo.index.value.block.size=256
+```
+
+### IO Configuration
+
+```properties
+# Enable io_uring on Linux 5.12+
+cairo.iouring.enabled=true
+```
+
+### Migration
+
+```properties
+# Repeat migrations from version (for downgrade support)
+cairo.repeat.migration.from.version=426
+```
+
+## Best Practices
+
+1. **Worker Threads**: Set to number of CPU cores for balanced workloads
+2. **Memory Limits**: Leave 10% headroom with `ram.usage.limit.percent=90`
+3. **Commit Mode**: Use `nosync` for high throughput, `sync` for durability
+4. **O3 Lag**: Adjust based on timestamp variance in your data
+5. **Symbol Capacity**: Enable auto-scaling for variable cardinality
+6. **WAL**: Enable for production systems requiring crash recovery
+7. **Connection Limits**: Set based on expected concurrent client count
+8. **Page Sizes**: Larger pages reduce syscalls but increase memory usage
+
+## Configuration Reload
+
+Some settings can be reloaded without restart:
+
+```sql
+SELECT reload_config();
+```
+
+Settings that support hot reload are marked in comments as "Database restart is NOT required when this setting is changed".

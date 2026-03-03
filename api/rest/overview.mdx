@@ -1,0 +1,152 @@
+---
+title: REST API Overview
+description: Overview of QuestDB's REST API for querying and managing data
+---
+
+QuestDB provides a REST API over HTTP for executing SQL queries, importing data, and exporting results. The API is stateless and uses standard HTTP methods.
+
+## Base URL
+
+The REST API is available at:
+
+```
+http://localhost:9000
+```
+
+By default, QuestDB's HTTP server listens on `0.0.0.0:9000`. You can configure this in `server.conf`:
+
+```properties
+# IP address and port of HTTP server
+http.net.bind.to=0.0.0.0:9000
+```
+
+## Available Endpoints
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/exec` | GET | Execute SQL queries and retrieve results as JSON |
+| `/exp` | GET | Export query results as CSV or Parquet |
+| `/imp` | POST | Import CSV data into tables |
+
+## Authentication
+
+By default, the REST API does not require authentication. You can enable HTTP Basic authentication in `server.conf`:
+
+```properties
+# Enable HTTP Basic authentication
+http.user=admin
+http.password=quest
+```
+
+When authentication is enabled, include credentials in the Authorization header:
+
+```bash
+curl -u admin:quest "http://localhost:9000/exec?query=SELECT+*+FROM+sensors"
+```
+
+## Response Format
+
+All API responses use standard HTTP status codes:
+
+| Status Code | Description |
+|-------------|-------------|
+| `200` | Success |
+| `400` | Bad Request - invalid query or parameters |
+| `403` | Forbidden - authorization error |
+| `500` | Internal Server Error |
+
+### Success Response
+
+Successful queries return JSON with this structure:
+
+```json
+{
+  "query": "SELECT * FROM sensors LIMIT 5",
+  "columns": [
+    {"name": "timestamp", "type": "TIMESTAMP"},
+    {"name": "sensor_id", "type": "SYMBOL"},
+    {"name": "temperature", "type": "DOUBLE"}
+  ],
+  "dataset": [
+    ["2024-01-01T00:00:00.000000Z", "sensor_1", 23.5],
+    ["2024-01-01T00:01:00.000000Z", "sensor_2", 24.1]
+  ],
+  "count": 2,
+  "timings": {
+    "compiler": 0.123,
+    "execute": 0.456,
+    "count": 2
+  }
+}
+```
+
+### Error Response
+
+Errors return JSON with position and message:
+
+```json
+{
+  "query": "SELECT * FROM nonexistent",
+  "error": "table does not exist [table=nonexistent]",
+  "position": 14
+}
+```
+
+The `position` field indicates the character offset where the error occurred.
+
+## Connection Limits
+
+You can configure connection limits per endpoint in `server.conf`:
+
+```properties
+# Maximum total HTTP connections
+http.net.connection.limit=256
+
+# Maximum connections for /exec endpoint
+http.json.query.connection.limit=-1
+
+# Maximum connections for /exp endpoint
+http.export.connection.limit=-1
+
+# Maximum connections for ILP over HTTP
+http.ilp.connection.limit=-1
+```
+
+A value of `-1` means no specific limit for that endpoint (limited only by the total connection limit).
+
+## Query Timeout
+
+Set query timeout using the `Statement-Timeout` header (in milliseconds):
+
+```bash
+curl -H "Statement-Timeout: 30000" \
+  "http://localhost:9000/exec?query=SELECT+*+FROM+large_table"
+```
+
+If the query exceeds the timeout, it will be cancelled and return an error.
+
+## URL Encoding
+
+Always URL-encode query parameters, especially SQL queries:
+
+```bash
+# Spaces become +
+curl "http://localhost:9000/exec?query=SELECT+*+FROM+sensors"
+
+# Or use %20
+curl "http://localhost:9000/exec?query=SELECT%20*%20FROM%20sensors"
+```
+
+## Next Steps
+
+<CardGroup cols={3}>
+  <Card title="Query Endpoint" icon="database" href="/api/rest/query">
+    Execute SQL queries with `/exec`
+  </Card>
+  <Card title="Import Endpoint" icon="file-import" href="/api/rest/import">
+    Import CSV data with `/imp`
+  </Card>
+  <Card title="Export Endpoint" icon="file-export" href="/api/rest/export">
+    Export data with `/exp`
+  </Card>
+</CardGroup>

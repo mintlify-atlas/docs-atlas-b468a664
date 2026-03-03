@@ -1,0 +1,244 @@
+---
+title: Node.js client
+description: QuestDB Node.js client for JavaScript and TypeScript applications
+---
+
+The QuestDB Node.js client provides a modern API for ingesting data using the InfluxDB Line Protocol.
+
+## Installation
+
+<CodeGroup>
+```bash npm
+npm install @questdb/nodejs-client
+```
+
+```bash yarn
+yarn add @questdb/nodejs-client
+```
+
+```bash pnpm
+pnpm add @questdb/nodejs-client
+```
+</CodeGroup>
+
+## Quick start
+
+```javascript
+const { Sender } = require('@questdb/nodejs-client');
+
+async function run() {
+  const sender = Sender.fromConfig('http::addr=localhost:9000');
+  
+  await sender.connect();
+  
+  sender
+    .table('trades')
+    .symbol('symbol', 'ETH-USD')
+    .symbol('side', 'sell')
+    .floatColumn('price', 2615.54)
+    .floatColumn('amount', 0.00044)
+    .atNow();
+  
+  await sender.flush();
+  await sender.close();
+}
+
+run().catch(console.error);
+```
+
+## TypeScript
+
+```typescript
+import { Sender } from '@questdb/nodejs-client';
+
+async function run(): Promise<void> {
+  const sender = Sender.fromConfig('http::addr=localhost:9000');
+  
+  await sender.connect();
+  
+  sender
+    .table('sensors')
+    .symbol('location', 'warehouse-1')
+    .intColumn('sensor_id', 12345)
+    .floatColumn('temperature', 23.5)
+    .stringColumn('status', 'active')
+    .booleanColumn('is_online', true)
+    .atNow();
+  
+  await sender.flush();
+  await sender.close();
+}
+
+run().catch(console.error);
+```
+
+## Configuration
+
+```javascript
+const sender = Sender.fromConfig(
+  'http::addr=localhost:9000;username=admin;password=quest;'
+);
+
+// Or TCP
+const tcpSender = Sender.fromConfig(
+  'tcp::addr=localhost:9009;username=admin;token=your-token;'
+);
+```
+
+### Connection strings
+
+<ParamField path="Protocol" type="string">
+  `http` or `tcp`
+</ParamField>
+
+<ParamField path="addr" type="string" required>
+  Server address (host:port)
+</ParamField>
+
+<ParamField path="username" type="string">
+  Authentication username
+</ParamField>
+
+<ParamField path="password" type="string">
+  Authentication password (HTTP)
+</ParamField>
+
+<ParamField path="token" type="string">
+  Authentication token (TCP)
+</ParamField>
+
+## Data types
+
+```javascript
+sender
+  .table('metrics')
+  .symbol('host', 'server-1')              // Symbol
+  .intColumn('cpu_cores', 8)               // Integer
+  .floatColumn('cpu_usage', 45.2)          // Float
+  .stringColumn('version', 'v1.2.3')       // String
+  .booleanColumn('is_active', true)        // Boolean
+  .timestampColumn('measured_at', Date.now() * 1000)  // Timestamp (micros)
+  .atNow();
+```
+
+## Batching
+
+```javascript
+const sender = Sender.fromConfig('http::addr=localhost:9000');
+await sender.connect();
+
+// Send 1000 rows
+for (let i = 0; i < 1000; i++) {
+  sender
+    .table('metrics')
+    .symbol('host', `server-${i % 10}`)
+    .floatColumn('cpu', Math.random() * 100)
+    .floatColumn('memory', Math.random() * 100)
+    .atNow();
+}
+
+await sender.flush();
+await sender.close();
+```
+
+## Auto-flush
+
+```javascript
+const sender = Sender.fromConfig(
+  'http::addr=localhost:9000;auto_flush=on;auto_flush_rows=1000;'
+);
+
+await sender.connect();
+
+// Automatically flushes after 1000 rows
+for (let i = 0; i < 5000; i++) {
+  sender
+    .table('events')
+    .symbol('type', 'page_view')
+    .stringColumn('url', `/page-${i}`)
+    .atNow();
+}
+
+await sender.flush();  // Flush remaining rows
+await sender.close();
+```
+
+## Error handling
+
+```javascript
+const { Sender } = require('@questdb/nodejs-client');
+
+async function run() {
+  let sender;
+  try {
+    sender = Sender.fromConfig('http::addr=localhost:9000');
+    await sender.connect();
+    
+    sender
+      .table('trades')
+      .symbol('symbol', 'BTC-USD')
+      .floatColumn('price', 50000.0)
+      .atNow();
+    
+    await sender.flush();
+  } catch (error) {
+    console.error('Failed to send data:', error);
+  } finally {
+    if (sender) {
+      await sender.close();
+    }
+  }
+}
+
+run().catch(console.error);
+```
+
+## Express.js integration
+
+```javascript
+const express = require('express');
+const { Sender } = require('@questdb/nodejs-client');
+
+const app = express();
+const sender = Sender.fromConfig('http::addr=localhost:9000');
+
+app.post('/metrics', async (req, res) => {
+  try {
+    sender
+      .table('api_requests')
+      .symbol('endpoint', req.path)
+      .symbol('method', req.method)
+      .intColumn('status', 200)
+      .atNow();
+    
+    await sender.flush();
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.listen(3000);
+```
+
+## Performance tips
+
+<Tip>
+Use HTTP protocol for better throughput with auto-flush enabled.
+</Tip>
+
+1. **Enable auto-flush**: Optimal for continuous streams
+2. **Use HTTP protocol**: Better performance than TCP for most cases
+3. **Batch writes**: Send multiple rows before flushing
+4. **Connection pooling**: Reuse sender instances
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="ILP Reference" icon="book" href="/api/ilp/overview">
+    Learn about the protocol
+  </Card>
+  <Card title="Examples" icon="code" href="https://github.com/questdb/nodejs-questdb-client">
+    Browse GitHub examples
+  </Card>
+</CardGroup>

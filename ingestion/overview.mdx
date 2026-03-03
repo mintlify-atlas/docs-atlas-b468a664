@@ -1,0 +1,148 @@
+---
+title: Data Ingestion Overview
+description: Overview of data ingestion methods available in QuestDB
+---
+
+QuestDB supports multiple ingestion methods optimized for different use cases, from high-throughput time-series data to bulk imports and SQL operations.
+
+## Ingestion Methods
+
+QuestDB provides four primary ingestion methods:
+
+### InfluxDB Line Protocol (ILP)
+
+A fast, schema-agnostic protocol for time-series data ingestion. QuestDB implements ILP over TCP, UDP, and HTTP.
+
+- **Best for:** High-throughput time-series data, IoT sensors, metrics collection
+- **Protocols:** TCP (port 9009), UDP (port 9009), HTTP (port 9000)
+- **Features:** Auto table creation, schema discovery, nanosecond precision
+- **Authentication:** Supported on TCP with elliptic curve signatures
+
+See [InfluxDB Line Protocol](/ingestion/influxdb-line-protocol) for details.
+
+### PostgreSQL Wire Protocol
+
+Standard PostgreSQL protocol for SQL INSERT statements and queries.
+
+- **Best for:** Application integration, SQL-based workflows, batch inserts
+- **Port:** 8812 (default)
+- **Features:** Full SQL support, prepared statements, transactions
+- **Authentication:** Username/password (cleartext)
+- **Compatibility:** Works with any PostgreSQL client library
+
+See [PostgreSQL Wire Protocol](/ingestion/postgres-wire) for details.
+
+### REST API
+
+HTTP endpoints for CSV imports and SQL execution.
+
+- **Best for:** CSV file imports, ad-hoc data loading, web integrations
+- **Endpoints:** `/imp` (import), `/exec` (SQL execution)
+- **Port:** 9000 (default)
+- **Features:** Multipart form uploads, schema inference, JSON/CSV response
+- **Authentication:** Optional HTTP Basic Auth
+
+See [REST API](/ingestion/rest-api) and [CSV Import](/ingestion/csv-import) for details.
+
+### Web Console
+
+Interactive browser-based interface for data import and exploration.
+
+- **Best for:** Manual imports, testing, data exploration
+- **URL:** `http://localhost:9000`
+- **Features:** Drag-and-drop CSV import, schema editor, query interface
+
+See [CSV Import](/ingestion/csv-import) for details.
+
+## Method Comparison
+
+| Method | Protocol | Port | Use Case | Throughput | Schema | Auth |
+|--------|----------|------|----------|------------|--------|------|
+| ILP/TCP | TCP | 9009 | High-speed streaming | Very High | Auto | EC signature |
+| ILP/UDP | UDP | 9009 | Fire-and-forget metrics | Very High | Auto | None |
+| ILP/HTTP | HTTP | 9000 | Cloud-native ingestion | High | Auto | HTTP Auth |
+| PostgreSQL | TCP | 8812 | SQL INSERT statements | Medium | Manual | User/Pass |
+| REST /imp | HTTP | 9000 | CSV bulk import | Medium | Auto/Manual | HTTP Auth |
+| Web Console | HTTP | 9000 | Interactive import | Low | Interactive | HTTP Auth |
+
+## Choosing an Ingestion Method
+
+### For Time-Series Data
+
+- **High volume, low latency:** ILP over TCP
+- **Metrics from multiple sources:** ILP over UDP
+- **Cloud deployments:** ILP over HTTP
+
+### For Relational Data
+
+- **Existing PostgreSQL applications:** PostgreSQL wire protocol
+- **Transactional inserts:** PostgreSQL wire protocol
+- **Bulk CSV loads:** REST API `/imp` endpoint
+
+### For Development and Testing
+
+- **Interactive exploration:** Web Console
+- **Script-based loading:** REST API with curl
+- **Testing queries:** PostgreSQL wire with psql
+
+## Default Ports
+
+QuestDB uses the following default ports:
+
+```plaintext
+9000  - HTTP server (REST API, Web Console, ILP/HTTP)
+9009  - ILP TCP/UDP
+8812  - PostgreSQL wire protocol
+9003  - Min HTTP server (optional)
+```
+
+All ports are configurable via `server.conf` or environment variables.
+
+## Performance Considerations
+
+### ILP Performance
+
+- TCP: 1M+ rows/sec per connection
+- UDP: Fire-and-forget, no acknowledgment
+- Batching recommended for optimal throughput
+
+### PostgreSQL Wire Performance
+
+- Use prepared statements for repeated inserts
+- Batch multiple rows in single INSERT
+- Insert into WAL tables for best performance
+
+### CSV Import Performance
+
+- Parallel column parsing
+- Schema inference on first 1000 lines
+- Direct write to table storage
+
+## Configuration
+
+All ingestion methods can be configured in `conf/server.conf`:
+
+```properties
+# ILP TCP
+line.tcp.net.bind.to=0.0.0.0:9009
+line.tcp.enabled=true
+
+# ILP UDP  
+line.udp.bind.to=0.0.0.0:9009
+line.udp.enabled=true
+
+# PostgreSQL
+pg.net.bind.to=0.0.0.0:8812
+pg.enabled=true
+
+# HTTP
+http.net.bind.to=0.0.0.0:9000
+http.enabled=true
+```
+
+## Next Steps
+
+- [InfluxDB Line Protocol](/ingestion/influxdb-line-protocol) - High-throughput time-series ingestion
+- [PostgreSQL Wire Protocol](/ingestion/postgres-wire) - SQL-based data insertion
+- [REST API](/ingestion/rest-api) - HTTP endpoints for data import
+- [CSV Import](/ingestion/csv-import) - Bulk CSV file loading

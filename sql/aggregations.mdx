@@ -1,0 +1,544 @@
+---
+title: Aggregation Functions
+description: Aggregate functions for data analysis and summarization.
+---
+
+QuestDB provides a comprehensive set of aggregate functions optimized for columnar storage and SIMD acceleration.
+
+## Basic Aggregates
+
+### COUNT
+
+Count rows or non-NULL values:
+
+```sql
+SELECT count() FROM trades;
+SELECT count(price) FROM trades;
+```
+
+**Query Result:**
+```
+count
+10000
+```
+
+Count distinct values:
+
+```sql
+SELECT count_distinct(symbol) FROM trades;
+```
+
+### SUM
+
+Sum numeric values:
+
+```sql
+SELECT sum(quantity) AS total_volume
+FROM trades;
+```
+
+**Query Result:**
+```
+total_volume
+1250000
+```
+
+### AVG
+
+Calculate average:
+
+```sql
+SELECT 
+    symbol,
+    avg(price) AS avg_price
+FROM trades
+GROUP BY symbol;
+```
+
+**Query Result:**
+```
+symbol  avg_price
+AAPL    150.75
+GOOG    142.50
+MSFT    250.25
+```
+
+### MIN / MAX
+
+Find minimum and maximum values:
+
+```sql
+SELECT 
+    symbol,
+    min(price) AS low,
+    max(price) AS high
+FROM trades
+GROUP BY symbol;
+```
+
+**Query Result:**
+```
+symbol  low     high
+AAPL    148.20  152.80
+GOOG    140.00  145.00
+MSFT    248.50  252.00
+```
+
+## Statistical Aggregates
+
+### STDDEV / STDDEV_SAMP
+
+Sample standard deviation:
+
+```sql
+SELECT 
+    symbol,
+    stddev_samp(price) AS price_volatility
+FROM trades
+GROUP BY symbol;
+```
+
+### STDDEV_POP
+
+Population standard deviation:
+
+```sql
+SELECT 
+    symbol,
+    stddev_pop(price) AS pop_stddev
+FROM trades
+GROUP BY symbol;
+```
+
+### VAR_SAMP
+
+Sample variance:
+
+```sql
+SELECT 
+    symbol,
+    var_samp(price) AS price_variance
+FROM trades
+GROUP BY symbol;
+```
+
+### VAR_POP
+
+Population variance:
+
+```sql
+SELECT 
+    symbol,
+    var_pop(price) AS pop_variance
+FROM trades
+GROUP BY symbol;
+```
+
+### COVAR_SAMP
+
+Sample covariance:
+
+```sql
+SELECT 
+    covar_samp(price, volume) AS price_volume_covariance
+FROM trades;
+```
+
+### COVAR_POP
+
+Population covariance:
+
+```sql
+SELECT 
+    covar_pop(price, volume) AS pop_covariance
+FROM trades;
+```
+
+### CORR
+
+Correlation coefficient:
+
+```sql
+SELECT 
+    corr(price, volume) AS price_volume_correlation
+FROM trades;
+```
+
+## Positional Aggregates
+
+### FIRST
+
+Return first value:
+
+```sql
+SELECT 
+    symbol,
+    first(price) AS opening_price
+FROM trades
+GROUP BY symbol;
+```
+
+### LAST
+
+Return last value:
+
+```sql
+SELECT 
+    symbol,
+    last(price) AS closing_price
+FROM trades
+GROUP BY symbol;
+```
+
+### FIRST_NOT_NULL
+
+Return first non-NULL value:
+
+```sql
+SELECT 
+    symbol,
+    first_not_null(price) AS first_valid_price
+FROM trades
+GROUP BY symbol;
+```
+
+### LAST_NOT_NULL
+
+Return last non-NULL value:
+
+```sql
+SELECT 
+    symbol,
+    last_not_null(price) AS last_valid_price
+FROM trades
+GROUP BY symbol;
+```
+
+## String Aggregates
+
+### STRING_AGG
+
+Concatenate strings:
+
+```sql
+SELECT 
+    date_trunc('day', timestamp) AS day,
+    string_agg(symbol, ',') AS symbols_traded
+FROM trades
+GROUP BY day;
+```
+
+**Query Result:**
+```
+day                          symbols_traded
+2023-12-28T00:00:00.000000Z  AAPL,GOOG,MSFT,AAPL,GOOG
+```
+
+## Percentile Aggregates
+
+### PERCENTILE_APPROX
+
+Approximate percentile (faster):
+
+```sql
+SELECT 
+    symbol,
+    percentile_approx(price, 0.5) AS median,
+    percentile_approx(price, 0.95) AS p95
+FROM trades
+GROUP BY symbol;
+```
+
+**Query Result:**
+```
+symbol  median  p95
+AAPL    150.50  152.00
+GOOG    142.00  144.50
+```
+
+## GROUP BY
+
+Group rows for aggregation:
+
+### Single Column
+
+```sql
+SELECT 
+    symbol,
+    count() AS trade_count,
+    sum(quantity) AS total_volume,
+    avg(price) AS avg_price
+FROM trades
+GROUP BY symbol;
+```
+
+### Multiple Columns
+
+```sql
+SELECT 
+    symbol,
+    date_trunc('day', timestamp) AS day,
+    count() AS trade_count,
+    sum(quantity) AS volume
+FROM trades
+GROUP BY symbol, day
+ORDER BY day DESC, symbol;
+```
+
+**Query Result:**
+```
+symbol  day                          trade_count  volume
+AAPL    2023-12-28T00:00:00.000000Z  250          25000
+GOOG    2023-12-28T00:00:00.000000Z  180          18000
+MSFT    2023-12-28T00:00:00.000000Z  200          20000
+AAPL    2023-12-27T00:00:00.000000Z  240          24000
+```
+
+### HAVING Clause
+
+Filter grouped results:
+
+```sql
+SELECT 
+    symbol,
+    avg(price) AS avg_price,
+    count() AS trade_count
+FROM trades
+GROUP BY symbol
+HAVING count() > 100 AND avg(price) > 100;
+```
+
+**Query Result:**
+```
+symbol  avg_price  trade_count
+AAPL    150.75     250
+MSFT    250.25     200
+```
+
+## Time-Series Aggregations
+
+### SAMPLE BY Aggregation
+
+Aggregate by time intervals:
+
+```sql
+SELECT 
+    timestamp,
+    symbol,
+    first(price) AS open,
+    max(price) AS high,
+    min(price) AS low,
+    last(price) AS close,
+    sum(quantity) AS volume
+FROM trades
+SAMPLE BY 1h;
+```
+
+**Query Result:**
+```
+timestamp                      symbol  open    high    low     close   volume
+2023-12-28T10:00:00.000000Z    AAPL    150.00  151.00  149.50  150.75  15000
+2023-12-28T11:00:00.000000Z    AAPL    150.80  152.00  150.50  151.50  12000
+2023-12-28T10:00:00.000000Z    GOOG    140.00  142.00  139.50  141.50  8000
+```
+
+### Rolling Aggregations
+
+Combine with WINDOW JOIN for rolling calculations:
+
+```sql
+SELECT 
+    t.symbol,
+    t.timestamp,
+    avg(p.price) AS rolling_avg_5min,
+    stddev_samp(p.price) AS rolling_volatility
+FROM trades t
+WINDOW JOIN prices p ON (t.symbol = p.symbol)
+RANGE BETWEEN 5 MINUTE PRECEDING AND CURRENT ROW;
+```
+
+## Advanced Aggregation Patterns
+
+### Conditional Aggregation
+
+Use CASE for conditional aggregation:
+
+```sql
+SELECT 
+    symbol,
+    sum(CASE WHEN price > 150 THEN quantity ELSE 0 END) AS high_price_volume,
+    sum(CASE WHEN price <= 150 THEN quantity ELSE 0 END) AS low_price_volume
+FROM trades
+GROUP BY symbol;
+```
+
+**Query Result:**
+```
+symbol  high_price_volume  low_price_volume
+AAPL    15000              10000
+GOOG    0                  18000
+```
+
+### Multiple Aggregation Levels
+
+Nested aggregations:
+
+```sql
+SELECT 
+    symbol,
+    avg(hourly_volume) AS avg_hourly_volume,
+    max(hourly_volume) AS peak_hourly_volume
+FROM (
+    SELECT 
+        symbol,
+        timestamp,
+        sum(quantity) AS hourly_volume
+    FROM trades
+    SAMPLE BY 1h
+)
+GROUP BY symbol;
+```
+
+### Pivot-Style Aggregation
+
+Create columns from row values:
+
+```sql
+SELECT 
+    date_trunc('day', timestamp) AS day,
+    sum(CASE WHEN symbol = 'AAPL' THEN quantity ELSE 0 END) AS aapl_volume,
+    sum(CASE WHEN symbol = 'GOOG' THEN quantity ELSE 0 END) AS goog_volume,
+    sum(CASE WHEN symbol = 'MSFT' THEN quantity ELSE 0 END) AS msft_volume
+FROM trades
+GROUP BY day;
+```
+
+**Query Result:**
+```
+day                          aapl_volume  goog_volume  msft_volume
+2023-12-28T00:00:00.000000Z  25000        18000        20000
+2023-12-27T00:00:00.000000Z  24000        17000        19000
+```
+
+## Performance Tips
+
+### Vectorized Aggregation
+
+QuestDB automatically uses SIMD vectorization for aggregates:
+
+```sql
+-- Automatically vectorized
+SELECT symbol, avg(price), sum(quantity)
+FROM trades
+GROUP BY symbol;
+```
+
+### Indexed GROUP BY
+
+Use SYMBOL columns for faster GROUP BY:
+
+```sql
+CREATE TABLE trades (
+    symbol SYMBOL INDEX,  -- Indexed for fast grouping
+    price DOUBLE,
+    quantity LONG,
+    timestamp TIMESTAMP
+) TIMESTAMP(timestamp) PARTITION BY DAY;
+```
+
+### Parallel Aggregation
+
+QuestDB can parallelize aggregations across CPU cores automatically.
+
+### Filter Before Aggregation
+
+Reduce data volume before aggregating:
+
+```sql
+SELECT symbol, avg(price)
+FROM trades
+WHERE timestamp > dateadd('d', -1, now())  -- Filter first
+GROUP BY symbol;
+```
+
+## NULL Handling
+
+Aggregate functions handle NULL values:
+
+- `count()` - counts all rows
+- `count(column)` - counts non-NULL values
+- `sum()`, `avg()`, `min()`, `max()` - ignore NULL values
+- `first()`, `last()` - may return NULL
+- `first_not_null()`, `last_not_null()` - skip NULL values
+
+```sql
+SELECT 
+    symbol,
+    count() AS total_rows,
+    count(price) AS non_null_prices,
+    avg(price) AS avg_price
+FROM trades
+GROUP BY symbol;
+```
+
+## Examples
+
+### Daily Trading Summary
+
+```sql
+SELECT 
+    date_trunc('day', timestamp) AS day,
+    symbol,
+    first(price) AS open,
+    max(price) AS high,
+    min(price) AS low,
+    last(price) AS close,
+    sum(quantity) AS volume,
+    count() AS trade_count
+FROM trades
+WHERE timestamp > dateadd('d', -7, now())
+GROUP BY day, symbol
+ORDER BY day DESC, symbol;
+```
+
+### Market Statistics
+
+```sql
+SELECT 
+    symbol,
+    count() AS trades,
+    sum(quantity) AS total_volume,
+    avg(price) AS avg_price,
+    stddev_samp(price) AS volatility,
+    min(price) AS day_low,
+    max(price) AS day_high,
+    (max(price) - min(price)) / min(price) * 100 AS price_range_pct
+FROM trades
+WHERE timestamp > dateadd('d', -1, now())
+GROUP BY symbol
+ORDER BY total_volume DESC;
+```
+
+### Hourly Volume Profile
+
+```sql
+SELECT 
+    hour(timestamp) AS hour_of_day,
+    avg(volume) AS avg_volume,
+    max(volume) AS peak_volume
+FROM (
+    SELECT 
+        timestamp,
+        sum(quantity) AS volume
+    FROM trades
+    SAMPLE BY 1h
+)
+GROUP BY hour_of_day
+ORDER BY hour_of_day;
+```
+
+## Next Steps
+
+- [Window Functions](/sql/window-functions) - Use analytical window functions
+- [Time-Series Functions](/sql/time-series-functions) - Learn SAMPLE BY and LATEST ON
+- [JOIN Operations](/sql/joins) - Combine data from multiple tables

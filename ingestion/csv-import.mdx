@@ -1,0 +1,593 @@
+---
+title: CSV Import
+description: Import CSV files via Web Console and REST API
+---
+
+QuestDB provides powerful CSV import capabilities through both the Web Console UI and the REST API. The import process includes automatic schema detection, type inference, and data validation.
+
+## Import Methods
+
+### Web Console (Interactive)
+
+The Web Console provides a drag-and-drop interface for CSV imports.
+
+**URL:** `http://localhost:9000`
+
+**Features:**
+- Visual drag-and-drop import
+- Interactive schema editor
+- Real-time validation
+- Import progress tracking
+- Error inspection
+
+### REST API (Programmatic)
+
+The `/imp` endpoint provides HTTP-based CSV import.
+
+**Endpoint:** `POST /imp`  
+**Port:** 9000 (default)
+
+**Features:**
+- Multipart form upload
+- Batch processing
+- Scriptable imports
+- JSON/Text response formats
+
+See [REST API](/ingestion/rest-api) for complete REST API documentation.
+
+## Web Console Import
+
+### Step 1: Access the Import UI
+
+1. Navigate to `http://localhost:9000`
+2. Click the **Import** button in the top navigation
+
+### Step 2: Upload CSV File
+
+**Drag and Drop:**
+- Drag your CSV file into the import area
+- Or click to browse and select a file
+
+**Supported Formats:**
+- CSV (comma-separated)
+- TSV (tab-separated)
+- Pipe-separated (|)
+- Custom delimiters
+
+### Step 3: Configure Import
+
+**Table Settings:**
+- **Table Name:** Name for the new table (defaults to filename)
+- **Schema Action:** Create new, append, or overwrite
+- **Partition Strategy:** NONE, HOUR, DAY, WEEK, MONTH, YEAR
+
+**Timestamp Settings:**
+- **Designated Timestamp:** Select timestamp column
+- **Timestamp Format:** Auto-detect or specify pattern
+
+**Parse Settings:**
+- **Header:** First line contains column names
+- **Skip LEV:** Skip lines with extra values
+- **Atomicity:** skipRow (continue on error) or abort (stop on error)
+
+### Step 4: Edit Schema
+
+QuestDB analyzes the first 1000 lines to infer column types.
+
+**Column Editor:**
+- Change column names
+- Modify data types
+- Set timestamp column
+- Configure index settings
+
+**Available Types:**
+- **Numeric:** BYTE, SHORT, INT, LONG, FLOAT, DOUBLE
+- **Text:** STRING, SYMBOL
+- **Temporal:** TIMESTAMP, DATE
+- **Other:** BOOLEAN, UUID, LONG256, GEOHASH
+
+### Step 5: Import
+
+Click **Import** to begin the import process.
+
+**Progress Indicators:**
+- Rows parsed
+- Rows imported
+- Parse errors
+- Import status
+
+**Error Handling:**
+- View error details for failed rows
+- Download error report
+- Adjust settings and retry
+
+### Step 6: Verify Import
+
+After successful import:
+- Table appears in tables list
+- Click table name to view data
+- Run queries to validate
+
+## CSV File Format
+
+### Basic Format
+
+**With Header:**
+```csv
+timestamp,sensor_id,temperature,humidity
+2024-01-15T10:00:00.000Z,s001,22.5,0.45
+2024-01-15T10:01:00.000Z,s002,23.1,0.48
+2024-01-15T10:02:00.000Z,s003,21.8,0.52
+```
+
+**Without Header:**
+```csv
+2024-01-15T10:00:00.000Z,s001,22.5,0.45
+2024-01-15T10:01:00.000Z,s002,23.1,0.48
+2024-01-15T10:02:00.000Z,s003,21.8,0.52
+```
+
+### Delimiters
+
+**Comma (default):**
+```csv
+name,age,city
+Alice,30,London
+Bob,25,Paris
+```
+
+**Tab-separated:**
+```tsv
+name	age	city
+Alice	30	London
+Bob	25	Paris
+```
+
+**Pipe-separated:**
+```
+name|age|city
+Alice|30|London
+Bob|25|Paris
+```
+
+### Data Types
+
+QuestDB infers types from the data:
+
+**Integers:**
+```csv
+id,count
+1,100
+2,200
+```
+Result: LONG columns
+
+**Decimals:**
+```csv
+price,amount
+99.99,0.5
+150.00,1.25
+```
+Result: DOUBLE columns
+
+**Text:**
+```csv
+name,description
+Product A,High quality
+Product B,Economy
+```
+Result: STRING columns
+
+**Timestamps:**
+```csv
+timestamp
+2024-01-15T10:00:00.000Z
+2024-01-15T10:01:00.000Z
+```
+Result: TIMESTAMP column
+
+**Booleans:**
+```csv
+active
+true
+false
+```
+Result: BOOLEAN column
+
+### Timestamp Formats
+
+QuestDB supports multiple timestamp formats:
+
+**ISO 8601:**
+```csv
+2024-01-15T10:00:00.000Z
+2024-01-15T10:00:00+00:00
+```
+
+**Unix Epoch:**
+```csv
+1705315200000000  # Microseconds
+1705315200000     # Milliseconds  
+1705315200        # Seconds
+```
+
+**Custom Patterns:**
+```csv
+timestamp
+2024-01-15 10:00:00
+2024/01/15 10:00:00
+15-01-2024 10:00:00
+```
+
+Specify pattern in schema:
+```json
+{"name": "timestamp", "type": "TIMESTAMP", "pattern": "yyyy-MM-dd HH:mm:ss"}
+```
+
+### Quoted Values
+
+**Strings with commas:**
+```csv
+name,address
+Alice,"123 Main St, London"
+Bob,"456 High St, Paris"
+```
+
+**Strings with quotes:**
+```csv
+name,quote
+Alice,"She said \"hello\""
+Bob,"He replied \"hi\""
+```
+
+## REST API Import
+
+### Basic Import
+
+```bash
+curl -F data=@data.csv 'http://localhost:9000/imp'
+```
+
+### Import with Options
+
+```bash
+curl -F data=@sensors.csv \
+  'http://localhost:9000/imp?name=sensors&timestamp=ts&partitionBy=HOUR&fmt=json'
+```
+
+### Import with Schema
+
+```bash
+curl -F schema='[
+  {"name":"timestamp","type":"TIMESTAMP"},
+  {"name":"sensor_id","type":"SYMBOL"},
+  {"name":"temperature","type":"DOUBLE"},
+  {"name":"humidity","type":"DOUBLE"}
+]' -F data=@sensors.csv 'http://localhost:9000/imp'
+```
+
+### Query Parameters
+
+| Parameter | Description | Default |
+|-----------|-------------|---------|
+| `name` | Table name | Filename |
+| `timestamp` | Timestamp column name | Auto-detect |
+| `partitionBy` | Partition strategy | DAY |
+| `overwrite` | Replace existing table | false |
+| `forceHeader` | Treat first line as header | Auto-detect |
+| `skipLev` | Skip line-extra-values errors | false |
+| `atomicity` | Error handling: skipRow/abort | abort |
+| `fmt` | Response format: json/text | text |
+
+### Response Format
+
+**JSON Response:**
+```json
+{
+  "status": "OK",
+  "location": "sensors",
+  "rowsRejected": 0,
+  "rowsImported": 1000,
+  "header": true,
+  "partitionBy": "DAY",
+  "timestamp": "timestamp",
+  "columns": [
+    {"name": "timestamp", "type": "TIMESTAMP", "size": 8, "errors": 0},
+    {"name": "sensor_id", "type": "SYMBOL", "size": 4, "errors": 0},
+    {"name": "temperature", "type": "DOUBLE", "size": 8, "errors": 0},
+    {"name": "humidity", "type": "DOUBLE", "size": 8, "errors": 0}
+  ]
+}
+```
+
+**Error Response:**
+```json
+{
+  "status": "Could not parse timestamp",
+  "line": 42,
+  "errorId": "abc123"
+}
+```
+
+## Schema Specification
+
+### Type Mapping
+
+| CSV Value | Inferred Type | Example |
+|-----------|---------------|----------|
+| `123` | LONG | Integer values |
+| `123.45` | DOUBLE | Decimal values |
+| `"text"` | STRING | Quoted text |
+| `text` | STRING/SYMBOL | Unquoted text |
+| `true`, `false` | BOOLEAN | Boolean values |
+| `2024-01-15T10:00:00Z` | TIMESTAMP | ISO 8601 dates |
+| `1705315200000` | LONG/TIMESTAMP | Unix timestamps |
+
+### Symbol vs String
+
+**Use SYMBOL for:**
+- Repeated values (e.g., sensor IDs, locations)
+- Low cardinality (< 1M unique values)
+- Frequent filtering and grouping
+
+**Use STRING for:**
+- Unique values (e.g., descriptions, messages)
+- High cardinality
+- Full-text content
+
+**Performance Impact:**
+- SYMBOL columns are indexed and memory-efficient
+- STRING columns are stored as-is
+
+## Advanced Features
+
+### Parallel Import
+
+Import multiple files in parallel:
+
+```bash
+#!/bin/bash
+for file in data_*.csv; do
+  curl -F data=@$file "http://localhost:9000/imp?name=combined" &
+done
+wait
+```
+
+### Incremental Import
+
+Append to existing table:
+
+```bash
+curl -F data=@new_data.csv \
+  'http://localhost:9000/imp?name=existing_table'
+```
+
+### Large File Import
+
+For files > 1GB, consider:
+
+1. **Split the file:**
+```bash
+split -l 1000000 large_file.csv chunk_
+```
+
+2. **Import chunks:**
+```bash
+for chunk in chunk_*; do
+  curl -F data=@$chunk "http://localhost:9000/imp?name=target_table"
+done
+```
+
+### Custom Delimiters
+
+QuestDB auto-detects delimiters, but you can specify:
+
+```bash
+# Tab-separated
+curl -F data=@data.tsv 'http://localhost:9000/imp'
+
+# Pipe-separated
+curl -F data=@data.txt 'http://localhost:9000/imp'
+```
+
+## Error Handling
+
+### Skip Row on Error
+
+Continue import despite errors:
+
+```bash
+curl -F data=@data.csv \
+  'http://localhost:9000/imp?atomicity=skipRow&fmt=json'
+```
+
+Response includes error count per column:
+```json
+{
+  "rowsRejected": 5,
+  "rowsImported": 995,
+  "columns": [
+    {"name": "value", "type": "DOUBLE", "errors": 5}
+  ]
+}
+```
+
+### Abort on Error
+
+Stop import on first error (default):
+
+```bash
+curl -F data=@data.csv \
+  'http://localhost:9000/imp?atomicity=abort'
+```
+
+### Common Errors
+
+**Parse Error:**
+```
+Could not parse timestamp: '2024-01-15 10:00:00'
+```
+Solution: Specify timestamp pattern in schema
+
+**Type Mismatch:**
+```
+Value '123.45' cannot be cast to INT
+```
+Solution: Change column type to DOUBLE
+
+**Line Too Long:**
+```
+Line exceeds maximum length
+```
+Solution: Increase `http.text.max.required.line.length`
+
+**Extra Values:**
+```
+Line has more values than columns
+```
+Solution: Use `skipLev=true` or fix CSV
+
+## Performance Optimization
+
+### Import Speed
+
+Typical import rates:
+- **Small rows (< 100 bytes):** 1M rows/sec
+- **Medium rows (100-500 bytes):** 500K rows/sec
+- **Large rows (> 500 bytes):** 100K rows/sec
+
+### Optimization Tips
+
+1. **Provide explicit schema** - Skip type inference
+2. **Use appropriate types** - SYMBOL for repeated values
+3. **Disable header detection** - Set `forceHeader=true`
+4. **Partition appropriately** - Match query patterns
+5. **Import to WAL tables** - Better concurrent write performance
+6. **Parallel imports** - Multiple files simultaneously
+
+### Configuration
+
+```properties
+# conf/server.conf
+
+# Buffer sizes
+http.receive.buffer.size=1048576
+http.text.roll.buffer.size=4096
+http.text.analysis.max.lines=1000
+
+# Import limits
+http.text.max.required.line.length.stddev=0.8
+http.text.max.required.delimiter.stddev=0.1222
+```
+
+## Complete Examples
+
+### Python Import Script
+
+```python
+import requests
+import json
+import sys
+
+def import_csv(filepath, table_name, schema=None):
+    url = 'http://localhost:9000/imp'
+    
+    # Prepare files
+    files = {'data': open(filepath, 'rb')}
+    
+    # Prepare parameters
+    params = {
+        'name': table_name,
+        'fmt': 'json',
+        'partitionBy': 'DAY'
+    }
+    
+    # Add schema if provided
+    if schema:
+        files['schema'] = ('schema', json.dumps(schema), 'application/json')
+    
+    # Send request
+    response = requests.post(url, files=files, params=params)
+    
+    # Check result
+    if response.status_code == 200:
+        result = response.json()
+        print(f"✓ Imported {result['rowsImported']} rows into {table_name}")
+        if result['rowsRejected'] > 0:
+            print(f"⚠ Rejected {result['rowsRejected']} rows")
+        return result
+    else:
+        print(f"✗ Import failed: {response.text}", file=sys.stderr)
+        sys.exit(1)
+
+# Example usage
+if __name__ == '__main__':
+    # Simple import
+    import_csv('sensors.csv', 'sensors')
+    
+    # Import with schema
+    schema = [
+        {'name': 'timestamp', 'type': 'TIMESTAMP'},
+        {'name': 'sensor_id', 'type': 'SYMBOL'},
+        {'name': 'temperature', 'type': 'DOUBLE'},
+        {'name': 'humidity', 'type': 'DOUBLE'}
+    ]
+    import_csv('sensors.csv', 'sensors', schema)
+```
+
+### Bash Import Script
+
+```bash
+#!/bin/bash
+
+# Configuration
+BASE_URL="http://localhost:9000"
+TABLE_NAME="sensors"
+CSV_FILE="sensors.csv"
+
+# Import function
+import_csv() {
+  local file=$1
+  local table=$2
+  
+  echo "Importing $file into $table..."
+  
+  response=$(curl -s -F "data=@$file" \
+    "$BASE_URL/imp?name=$table&fmt=json")
+  
+  rows_imported=$(echo $response | jq -r '.rowsImported')
+  rows_rejected=$(echo $response | jq -r '.rowsRejected')
+  
+  if [ "$rows_imported" != "null" ]; then
+    echo "✓ Imported $rows_imported rows"
+    if [ "$rows_rejected" -gt 0 ]; then
+      echo "⚠ Rejected $rows_rejected rows"
+    fi
+  else
+    echo "✗ Import failed"
+    echo $response | jq .
+    exit 1
+  fi
+}
+
+# Run import
+import_csv "$CSV_FILE" "$TABLE_NAME"
+```
+
+## Best Practices
+
+1. **Validate CSV locally** - Check format before import
+2. **Use explicit schema** - Faster imports, predictable types
+3. **Test with sample** - Import small subset first
+4. **Monitor errors** - Check rowsRejected in response
+5. **Choose appropriate partition** - Based on query patterns
+6. **Use SYMBOL for tags** - Better performance for repeated values
+7. **Specify timestamp column** - Don't rely on auto-detection
+8. **Handle errors gracefully** - Use atomicity=skipRow for dirty data
+
+## Related Topics
+
+- [REST API](/ingestion/rest-api) - Complete HTTP API reference
+- [InfluxDB Line Protocol](/ingestion/influxdb-line-protocol) - Alternative ingestion method
+- [SQL Reference](/sql) - Query imported data
+- [Table Management](/tables) - Manage tables after import

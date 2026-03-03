@@ -1,0 +1,403 @@
+---
+title: ILP over TCP
+sidebarTitle: TCP
+description: High-performance TCP-based ingestion using InfluxDB Line Protocol with authentication and error handling
+---
+
+QuestDB's ILP/TCP receiver provides reliable, high-throughput ingestion of time-series data over TCP connections. This is the recommended method for production workloads.
+
+## Overview
+
+The TCP receiver listens on port **9009** by default and supports:
+
+- **Persistent connections** - Connection pooling for reduced overhead
+- **Authentication** - Optional elliptic curve authentication for security
+- **Error handling** - Synchronous error responses for failed writes
+- **Binary protocol support** - Efficient binary encoding for arrays and decimals
+- **Batching** - Send multiple measurements per connection for high throughput
+
+## Quick Start
+
+### Basic Ingestion
+
+Connect to QuestDB and send ILP messages over TCP:
+
+```bash
+# Using netcat (nc)
+echo "sensors,location=london temperature=23.5,humidity=65.2 $(date +%s)000000000" | nc localhost 9009
+```
+
+```python
+# Using Python socket
+import socket
+import time
+
+sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+sock.connect(('localhost', 9009))
+
+timestamp = int(time.time() * 1_000_000_000)  # nanoseconds
+message = f"sensors,location=london temperature=23.5,humidity=65.2 {timestamp}\n"
+sock.sendall(message.encode())
+
+sock.close()
+```
+
+### Batch Ingestion
+
+Send multiple measurements in a single connection:
+
+```python
+import socket
+import time
+
+sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+sock.connect(('localhost', 9009))
+
+# Send 1000 measurements
+for i in range(1000):
+    timestamp = int(time.time() * 1_000_000_000) + i * 1000000  # 1ms apart
+    message = f"sensors,sensor_id=sensor_{i%10} temperature={20 + i%10},humidity={60 + i%5} {timestamp}\n"
+    sock.sendall(message.encode())
+
+sock.close()
+```
+
+## Connection Management
+
+### Connection Lifecycle
+
+1. **Connect** - Establish TCP connection to port 9009
+2. **Authenticate** (optional) - Complete authentication handshake if enabled
+3. **Send data** - Write one or more ILP messages, each terminated by `\n`
+4. **Receive errors** (if any) - Server sends error messages for invalid data
+5. **Close** - Close the connection or keep alive for reuse
+
+### Connection Pooling
+
+For high-throughput applications, maintain a pool of persistent connections:
+
+```python
+from queue import Queue
+import socket
+import threading
+
+class ILPConnectionPool:
+    def __init__(self, host='localhost', port=9009, pool_size=10):
+        self.host = host
+        self.port = port
+        self.pool = Queue(maxsize=pool_size)
+        
+        # Pre-create connections
+        for _ in range(pool_size):
+            conn = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            conn.connect((host, port))
+            self.pool.put(conn)
+    
+    def get_connection(self):
+        return self.pool.get()
+    
+    def return_connection(self, conn):
+        self.pool.put(conn)
+    
+    def send(self, message):
+        conn = self.get_connection()
+        try:
+            conn.sendall(message.encode())
+        finally:
+            self.return_connection(conn)
+
+# Usage
+pool = ILPConnectionPool()
+pool.send("sensors,location=london temperature=23.5 1609459200000000000\n")
+```
+
+## Protocol Features
+
+### Text Format
+
+The standard ILP text format is supported:
+
+```
+table_name,tag1=value1,tag2=value2 field1=value1,field2=value2 timestamp
+```
+
+Example:
+
+```
+sensors,location=london,device=sensor_001 temperature=23.5,humidity=65.2,pressure=1013.25 1609459200000000000
+```
+
+### Binary Format
+
+For arrays and high-precision decimals, QuestDB supports a binary encoding using the `==` prefix:
+
+```
+table_name,tag1=value1 field1==<binary_data> timestamp
+```
+
+Binary format structure:
+- Type byte (1 byte): Identifies the data type
+- Length (1+ bytes): Size of the value
+- Value (N bytes): Binary-encoded data
+
+Supported binary types:
+- `BOOLEAN` (type: 6)
+- `FLOAT` (type: 2) - 4 bytes
+- `DOUBLE` (type: 16) - 8 bytes
+- `INTEGER` (type: 3) - 4 bytes
+- `LONG` (type: 15) - 8 bytes
+- `TIMESTAMP` (type: 13) - 9 bytes (1 byte unit + 8 bytes value)
+- `ARRAY` (type: 14) - Variable length
+- `DECIMAL` (type: 23) - Variable length (1 byte scale + 1 byte length + N bytes value)
+
+### Message Termination
+
+Each ILP message must be terminated with a newline character (`\n` or `\r\n`):
+
+```
+sensors,location=london temperature=23.5 1609459200000000000\n
+sensors,location=paris temperature=18.2 1609459201000000000\n
+```
+
+## Error Handling
+
+The TCP receiver validates each message and may return error responses:
+
+### Error Response Format
+
+Errors are sent as text messages over the same connection:
+
+```
+ERROR: <error_message>
+```
+
+### Common Errors
+
+<ResponseField name="EMPTY_LINE" type="error">
+  Empty message received. Ensure each message contains at least a table name and one field.
+</ResponseField>
+
+<ResponseField name="NO_FIELDS" type="error">
+  No fields provided in the message. At least one field is required.
+  
+  ```
+  # Invalid: no fields
+  sensors,location=london 1609459200000000000
+  
+  # Valid: has temperature field
+  sensors,location=london temperature=23.5 1609459200000000000
+  ```
+</ResponseField>
+
+<ResponseField name="INVALID_FIELD_VALUE" type="error">
+  Field value cannot be parsed. Check data type suffixes and formatting.
+  
+  ```
+  # Invalid: missing closing quote
+  logs,app=web message="hello
+  
+  # Valid: properly quoted
+  logs,app=web message="hello"
+  ```
+</ResponseField>
+
+<ResponseField name="INVALID_TIMESTAMP" type="error">
+  Timestamp cannot be parsed. Ensure it's a valid integer with optional unit suffix.
+  
+  ```
+  # Invalid: timestamp is not numeric
+  sensors,location=london temperature=23.5 not_a_number
+  
+  # Valid: numeric timestamp
+  sensors,location=london temperature=23.5 1609459200000000000
+  ```
+</ResponseField>
+
+<ResponseField name="INVALID_FIELD_SEPARATOR" type="error">
+  Incorrect separator between message components. Use commas for tags, spaces between sections.
+</ResponseField>
+
+### Error Handling Example
+
+```python
+import socket
+
+sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+sock.connect(('localhost', 9009))
+
+try:
+    # Send potentially invalid message
+    message = "sensors,location=london temperature=23.5 invalid_timestamp\n"
+    sock.sendall(message.encode())
+    
+    # Check for error response
+    sock.settimeout(1.0)
+    try:
+        response = sock.recv(4096).decode()
+        if response.startswith('ERROR:'):
+            print(f"Server error: {response}")
+    except socket.timeout:
+        # No error response means success
+        pass
+        
+finally:
+    sock.close()
+```
+
+## Performance Tuning
+
+### Buffer Sizing
+
+<ParamField path="recv_buffer_size" type="integer" default="2048">
+  Size of the receive buffer per connection. Increase for larger messages.
+</ParamField>
+
+<ParamField path="max_recv_buffer_size" type="long" default="1GB">
+  Maximum receive buffer size. Guards against memory exhaustion.
+</ParamField>
+
+<ParamField path="max_measurement_size" type="integer" default="512">
+  Maximum number of fields per measurement. Increase for wide tables.
+</ParamField>
+
+### Commit Configuration
+
+<ParamField path="commit_interval" type="long" default="2000ms">
+  Maximum time between commits. Lower values reduce data loss risk but may decrease throughput.
+</ParamField>
+
+<ParamField path="commit_interval_fraction" type="double" default="0.5">
+  Fraction of the target commit interval used for actual commits. Provides headroom for write spikes.
+</ParamField>
+
+### Worker Threads
+
+<ParamField path="writer_queue_capacity" type="integer" default="64">
+  Capacity of the writer queue. Increase for higher write concurrency.
+</ParamField>
+
+<ParamField path="writer_idle_timeout" type="long" default="30000ms">
+  Time before idle table writers are released. Lower values free resources faster.
+</ParamField>
+
+## Configuration
+
+TCP receiver configuration is set in `server.conf`:
+
+```properties
+# Enable/disable ILP over TCP
+line.tcp.enabled=true
+
+# TCP listener configuration
+line.tcp.net.bind.to=0.0.0.0:9009
+line.tcp.net.connection.limit=256
+line.tcp.net.connection.timeout=300000
+
+# Buffer configuration
+line.tcp.net.recv.buf.size=2048
+line.tcp.max.recv.buf.size=1073741824
+line.tcp.max.measurement.size=512
+
+# Commit configuration
+line.tcp.commit.interval.default=2000
+line.tcp.commit.interval.fraction=0.5
+line.tcp.maintenance.interval=100
+
+# Writer configuration
+line.tcp.writer.queue.capacity=64
+line.tcp.writer.idle.timeout=30000
+
+# Schema configuration
+line.tcp.auto.create.new.tables=true
+line.tcp.auto.create.new.columns=true
+line.tcp.default.partition.by=DAY
+
+# Data type defaults
+line.tcp.default.column.type.integer=LONG
+line.tcp.default.column.type.float=DOUBLE
+line.tcp.timestamp.unit=nanos
+
+# Authentication
+line.tcp.auth.db.path=/path/to/auth.db
+
+# Error handling
+line.tcp.disconnect.on.error=true
+line.tcp.log.message.on.error=true
+```
+
+### Configuration Properties
+
+<ResponseField name="line.tcp.enabled" type="boolean" default="true">
+  Enable or disable the ILP/TCP receiver.
+</ResponseField>
+
+<ResponseField name="line.tcp.net.bind.to" type="string" default="0.0.0.0:9009">
+  Network interface and port to bind. Use `0.0.0.0` for all interfaces.
+</ResponseField>
+
+<ResponseField name="line.tcp.auth.db.path" type="string" default="null">
+  Path to authentication database. If null, authentication is disabled.
+  
+  See [Authentication](/api/ilp/authentication) for details.
+</ResponseField>
+
+<ResponseField name="line.tcp.auto.create.new.tables" type="boolean" default="true">
+  Automatically create tables from ILP messages. If false, tables must be pre-created.
+</ResponseField>
+
+<ResponseField name="line.tcp.auto.create.new.columns" type="boolean" default="true">
+  Automatically add columns to existing tables. If false, messages with unknown columns are rejected.
+</ResponseField>
+
+<ResponseField name="line.tcp.default.partition.by" type="string" default="DAY">
+  Default partitioning strategy for auto-created tables: `NONE`, `DAY`, `WEEK`, `MONTH`, `YEAR`.
+</ResponseField>
+
+<ResponseField name="line.tcp.timestamp.unit" type="string" default="nanos">
+  Default timestamp unit when no suffix is provided: `nanos`, `micros`, `millis`.
+</ResponseField>
+
+<ResponseField name="line.tcp.disconnect.on.error" type="boolean" default="true">
+  Disconnect client connections after errors. If false, connections remain open.
+</ResponseField>
+
+## Best Practices
+
+<Tip>
+  **Reuse connections** - Creating new TCP connections is expensive. Maintain a connection pool and reuse connections for multiple writes.
+</Tip>
+
+<Tip>
+  **Batch writes** - Send multiple measurements per connection. Group by table for optimal performance.
+</Tip>
+
+<Tip>
+  **Send data in timestamp order** - Writing data in chronological order optimizes partition writes and reduces memory usage.
+</Tip>
+
+<Warning>
+  **Handle errors gracefully** - Always check for error responses after writes. Implement retry logic with exponential backoff.
+</Warning>
+
+<Warning>
+  **Monitor buffer sizes** - If messages exceed buffer limits, increase `line.tcp.max.recv.buf.size` or reduce message size.
+</Warning>
+
+## Monitoring
+
+Monitor ILP/TCP health using these metrics:
+
+- **Connection count** - Number of active TCP connections
+- **Write throughput** - Rows per second ingested
+- **Error rate** - Failed writes per second
+- **Commit latency** - Time to commit data to disk
+- **Buffer utilization** - Receive buffer usage
+
+Metrics are available via the `/metrics` REST endpoint and system tables.
+
+## Related Resources
+
+- [ILP Overview](/api/ilp/overview)
+- [ILP Authentication](/api/ilp/authentication)
+- [ILP over UDP](/api/ilp/udp)
+- [Client Libraries](/clients)

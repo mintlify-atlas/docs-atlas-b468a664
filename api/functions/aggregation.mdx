@@ -1,0 +1,536 @@
+---
+title: Aggregation Functions
+description: Aggregate functions for GROUP BY queries in QuestDB
+---
+
+Aggregation functions compute single result values from sets of input values. Used with GROUP BY clauses or over entire result sets.
+
+## Count Functions
+
+### count
+
+Counts the number of rows.
+
+**Signature:** `count()`
+
+**Returns:** `LONG`
+
+**Example:**
+
+```sql
+SELECT count() FROM trades;
+-- Result: 1000000
+
+SELECT symbol, count() 
+FROM trades 
+GROUP BY symbol;
+```
+
+### count (column)
+
+Counts non-NULL values in a column.
+
+**Signature:** `count(column)`
+
+**Parameters:**
+- `column` - Any column
+
+**Returns:** `LONG`
+
+**Example:**
+
+```sql
+SELECT count(price) FROM trades;
+-- Counts only non-NULL prices
+```
+
+### count_distinct
+
+Counts unique non-NULL values.
+
+**Signature:** `count_distinct(column)`
+
+**Parameters:**
+- `column` - Any column
+
+**Returns:** `LONG`
+
+**Example:**
+
+```sql
+SELECT count_distinct(symbol) FROM trades;
+-- Result: 50
+```
+
+## Sum Functions
+
+### sum
+
+Computes sum of values.
+
+**Signature:** `sum(column)`
+
+**Parameters:**
+- `column` - Numeric column
+
+**Returns:** Same type as input (INT, LONG, DOUBLE, etc.)
+
+**Example:**
+
+```sql
+SELECT sum(quantity) FROM trades;
+-- Result: 5000000
+
+SELECT 
+    symbol,
+    sum(quantity * price) as total_value
+FROM trades
+GROUP BY symbol;
+```
+
+**Performance:** SIMD-accelerated for vectorized computation.
+
+### nsum
+
+Neumaier sum - more accurate summation using compensated algorithm.
+
+**Signature:** `nsum(D)`
+
+**Parameters:**
+- `D` - DOUBLE column
+
+**Returns:** `DOUBLE`
+
+**Example:**
+
+```sql
+SELECT nsum(price) FROM trades;
+-- More accurate for large datasets with varying magnitudes
+```
+
+## Average Functions
+
+### avg
+
+Computes arithmetic mean.
+
+**Signature:** `avg(column)`
+
+**Parameters:**
+- `column` - Numeric column
+
+**Returns:** `DOUBLE`
+
+**Example:**
+
+```sql
+SELECT avg(price) FROM trades;
+-- Result: 125.43
+
+SELECT 
+    date_trunc('hour', timestamp) as hour,
+    avg(price) as avg_price
+FROM trades
+GROUP BY hour;
+```
+
+**Performance:** SIMD-accelerated.
+
+### weighted_avg
+
+Weighted average.
+
+**Signature:** `weighted_avg(DD)`
+
+**Parameters:**
+- First `D` - Value column
+- Second `D` - Weight column
+
+**Returns:** `DOUBLE`
+
+**Example:**
+
+```sql
+SELECT weighted_avg(price, quantity) FROM trades;
+-- Average price weighted by quantity
+```
+
+## Min/Max Functions
+
+### min
+
+Finds minimum value.
+
+**Signature:** `min(column)`
+
+**Parameters:**
+- `column` - Any comparable column
+
+**Returns:** Same type as input
+
+**Example:**
+
+```sql
+SELECT min(price) FROM trades;
+-- Result: 98.50
+
+SELECT symbol, min(price), max(price)
+FROM trades
+GROUP BY symbol;
+```
+
+**Performance:** SIMD-accelerated for numeric types.
+
+### max
+
+Finds maximum value.
+
+**Signature:** `max(column)`
+
+**Parameters:**
+- `column` - Any comparable column
+
+**Returns:** Same type as input
+
+**Example:**
+
+```sql
+SELECT max(price) FROM trades;
+-- Result: 152.75
+```
+
+## Statistical Functions
+
+### stddev
+
+Computes sample standard deviation.
+
+**Signature:** `stddev(D)`
+
+**Parameters:**
+- `D` - DOUBLE column
+
+**Returns:** `DOUBLE`
+
+**Example:**
+
+```sql
+SELECT stddev(price) FROM trades;
+-- Result: 12.34
+
+SELECT symbol, stddev(price) as volatility
+FROM trades
+GROUP BY symbol;
+```
+
+### stddev_pop
+
+Computes population standard deviation.
+
+**Signature:** `stddev_pop(D)`
+
+**Parameters:**
+- `D` - DOUBLE column
+
+**Returns:** `DOUBLE`
+
+### stddev_samp
+
+Alias for `stddev()`. Sample standard deviation.
+
+**Signature:** `stddev_samp(D)`
+
+**Parameters:**
+- `D` - DOUBLE column
+
+**Returns:** `DOUBLE`
+
+### variance
+
+Computes sample variance.
+
+**Signature:** `variance(D)`
+
+**Parameters:**
+- `D` - DOUBLE column
+
+**Returns:** `DOUBLE`
+
+**Example:**
+
+```sql
+SELECT variance(price) FROM trades;
+```
+
+### var_pop
+
+Computes population variance.
+
+**Signature:** `var_pop(D)`
+
+**Parameters:**
+- `D` - DOUBLE column
+
+**Returns:** `DOUBLE`
+
+### var_samp
+
+Alias for `variance()`. Sample variance.
+
+**Signature:** `var_samp(D)`
+
+**Parameters:**
+- `D` - DOUBLE column
+
+**Returns:** `DOUBLE`
+
+## Regression Functions
+
+### regr_slope
+
+Computes slope of linear regression.
+
+**Signature:** `regr_slope(DD)`
+
+**Parameters:**
+- First `D` - Dependent variable (y)
+- Second `D` - Independent variable (x)
+
+**Returns:** `DOUBLE`
+
+**Example:**
+
+```sql
+SELECT regr_slope(price, timestamp::LONG) FROM trades;
+-- Price trend over time
+```
+
+### regr_intercept
+
+Computes y-intercept of linear regression.
+
+**Signature:** `regr_intercept(DD)`
+
+**Parameters:**
+- First `D` - Dependent variable (y)
+- Second `D` - Independent variable (x)
+
+**Returns:** `DOUBLE`
+
+## String Aggregation
+
+### string_agg
+
+Concatenates string values with separator.
+
+**Signature:** `string_agg(Ss)`
+
+**Parameters:**
+- `S` - STRING column
+- `s` - Separator string
+
+**Returns:** `STRING`
+
+**Example:**
+
+```sql
+SELECT string_agg(symbol, ', ') FROM trades;
+-- Result: AAPL, GOOGL, MSFT, TSLA
+
+SELECT 
+    trader_id,
+    string_agg(symbol, '|') as traded_symbols
+FROM trades
+GROUP BY trader_id;
+```
+
+### string_distinct_agg
+
+Concatenates unique string values.
+
+**Signature:** `string_distinct_agg(Ss)`
+
+**Parameters:**
+- `S` - STRING column
+- `s` - Separator string
+
+**Returns:** `STRING`
+
+**Example:**
+
+```sql
+SELECT string_distinct_agg(symbol, ', ') FROM trades;
+-- Result: AAPL, GOOGL, MSFT (no duplicates)
+```
+
+## Mode Function
+
+### mode
+
+Finds most frequent value.
+
+**Signature:** `mode(column)`
+
+**Parameters:**
+- `column` - Any column
+
+**Returns:** Same type as input
+
+**Example:**
+
+```sql
+SELECT mode(symbol) FROM trades;
+-- Result: AAPL (most traded symbol)
+```
+
+## First/Last Functions
+
+### first
+
+Returns first value in group.
+
+**Signature:** `first(column)`
+
+**Parameters:**
+- `column` - Any column
+
+**Returns:** Same type as input
+
+**Example:**
+
+```sql
+SELECT 
+    symbol,
+    first(price) as opening_price
+FROM trades
+GROUP BY symbol;
+```
+
+### last
+
+Returns last value in group.
+
+**Signature:** `last(column)`
+
+**Parameters:**
+- `column` - Any column
+
+**Returns:** Same type as input
+
+**Example:**
+
+```sql
+SELECT 
+    symbol,
+    last(price) as closing_price
+FROM trades
+GROUP BY symbol;
+```
+
+## Advanced Aggregations
+
+### ksum
+
+Kahan summation - compensated sum for better accuracy.
+
+**Signature:** `ksum(D)`
+
+**Parameters:**
+- `D` - DOUBLE column
+
+**Returns:** `DOUBLE`
+
+**Example:**
+
+```sql
+SELECT ksum(price * quantity) FROM trades;
+-- More accurate than sum() for floating-point
+```
+
+### haversine_dist_deg
+
+Computes average haversine distance between lat/lon points.
+
+**Signature:** `haversine_dist_deg(DDDD)`
+
+**Parameters:**
+- Latitude 1 (degrees)
+- Longitude 1 (degrees)
+- Latitude 2 (degrees)
+- Longitude 2 (degrees)
+
+**Returns:** `DOUBLE` (kilometers)
+
+## Using Aggregations
+
+### With GROUP BY
+
+```sql
+SELECT 
+    symbol,
+    count() as trade_count,
+    sum(quantity) as total_qty,
+    avg(price) as avg_price,
+    min(price) as low,
+    max(price) as high
+FROM trades
+WHERE timestamp > '2024-03-15T00:00:00Z'
+GROUP BY symbol
+ORDER BY total_qty DESC;
+```
+
+### With SAMPLE BY
+
+```sql
+SELECT 
+    timestamp,
+    symbol,
+    first(price) as open,
+    max(price) as high,
+    min(price) as low,
+    last(price) as close,
+    sum(quantity) as volume
+FROM trades
+SAMPLE BY 1h ALIGN TO CALENDAR;
+```
+
+### Without GROUP BY
+
+```sql
+SELECT 
+    count() as total_trades,
+    sum(quantity * price) as total_value,
+    avg(price) as avg_price
+FROM trades;
+```
+
+## Performance Notes
+
+### SIMD Acceleration
+
+These functions use SIMD instructions for vectorized computation:
+- `sum()`, `avg()`, `min()`, `max()`
+- `stddev()`, `variance()`
+- Statistical aggregations
+
+### Batch Computation
+
+Many aggregations support batch processing for better CPU cache utilization.
+
+### Memory Efficiency
+
+Aggregations use constant memory per group, regardless of group size.
+
+## NULL Handling
+
+- Most aggregations skip NULL values
+- `count()` counts all rows
+- `count(column)` counts non-NULL values
+- Empty groups return NULL for most functions, 0 for `count()`
+
+## See Also
+
+- [GROUP BY Clause](/reference/sql/group-by/)
+- [SAMPLE BY Clause](/reference/sql/sample-by/)
+- [Window Functions](/api/functions/window/)
+- [Finance Functions](/api/functions/finance/)

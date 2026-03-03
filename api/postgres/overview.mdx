@@ -1,0 +1,143 @@
+---
+title: PostgreSQL Wire Protocol
+description: Overview of QuestDB's PostgreSQL wire protocol compatibility and features
+---
+
+QuestDB implements the PostgreSQL wire protocol, allowing you to query data using PostgreSQL-compatible tools and drivers. This enables seamless integration with a wide ecosystem of PostgreSQL clients and applications.
+
+## Protocol compatibility
+
+QuestDB supports PostgreSQL wire protocol connections on port **8812** by default. The implementation is compatible with PostgreSQL 11.3 wire protocol specification.
+
+### Supported features
+
+- **Simple Query protocol**: Execute queries directly using the simple query flow
+- **Extended Query protocol**: Prepare statements with parameter binding for better performance
+- **Named statements and portals**: Create and reuse prepared statements across multiple executions
+- **Binary and text format**: Support for both text and binary parameter/result encoding
+- **Authentication**: Username and password authentication with configurable users
+- **TLS/SSL encryption**: Secure connections using TLS
+- **Transaction support**: BEGIN, COMMIT, and ROLLBACK statements
+- **Query caching**: Automatic caching of SELECT and INSERT queries for improved performance
+
+### Server version
+
+QuestDB reports itself as PostgreSQL version **11.3** to maintain compatibility with client drivers that perform version checks.
+
+## Default configuration
+
+| Parameter | Default Value | Description |
+|-----------|--------------|-------------|
+| **Port** | 8812 | PostgreSQL wire protocol listening port |
+| **Bind address** | 0.0.0.0:8812 | Network interface and port |
+| **Username** | admin | Default admin username |
+| **Password** | quest | Default admin password |
+| **Read-only user** | user | Optional read-only username |
+| **Read-only password** | quest | Optional read-only password |
+| **Connection limit** | 64 | Maximum concurrent connections |
+| **Connection timeout** | 300000ms | Idle connection timeout |
+| **Receive buffer** | 1MB | Socket receive buffer size |
+| **Send buffer** | 1MB | Socket send buffer size |
+
+## Authentication
+
+QuestDB supports two user types for PostgreSQL wire protocol:
+
+1. **Admin user** (default: `admin/quest`): Full read and write access
+2. **Read-only user** (default: `user/quest`): Query-only access, data mutation queries are rejected
+
+The read-only user must be explicitly enabled in the server configuration:
+
+```properties title="server.conf"
+pg.readonly.user.enabled=true
+```
+
+## Query caching
+
+QuestDB implements intelligent query caching for PostgreSQL protocol queries:
+
+- **SELECT cache**: Enabled by default, caches compiled query plans for SELECT statements
+- **INSERT cache**: Enabled by default, caches compiled INSERT statements per session
+
+Cache configuration:
+
+```properties title="server.conf"
+# SELECT query cache
+pg.select.cache.enabled=true
+pg.select.cache.block.count=16  # 8 * worker_count
+pg.select.cache.row.count=4     # 2 * worker_count
+
+# INSERT query cache
+pg.insert.cache.enabled=true
+pg.insert.cache.block.count=4
+pg.insert.cache.row.count=4
+```
+
+## Configuration options
+
+Enable or disable the PostgreSQL wire protocol in `server.conf`:
+
+```properties title="server.conf"
+# Enable PostgreSQL wire protocol
+pg.enabled=true
+
+# Bind to specific interface and port
+pg.net.bind.to=0.0.0.0:8812
+
+# Authentication
+pg.user=admin
+pg.password=quest
+
+# Connection limits
+pg.net.connection.limit=64
+pg.net.connection.timeout=300000
+
+# Buffer sizes
+pg.recv.buffer.size=1M
+pg.send.buffer.size=1M
+
+# Worker threads
+pg.worker.count=2
+
+# Prepared statement limits
+pg.named.statement.limit=10000
+
+# Pipeline capacity for batch operations
+pg.pipeline.capacity=64
+```
+
+## Limitations
+
+While QuestDB implements the PostgreSQL wire protocol, it is not a full PostgreSQL database. Some limitations include:
+
+- **SQL dialect differences**: QuestDB uses its own SQL dialect optimized for time-series data
+- **System tables**: PostgreSQL system catalogs are partially implemented for compatibility
+- **BLOB size limit**: Maximum BLOB size on query is 512KB by default (configurable via `pg.max.blob.size.on.query`)
+- **Unsupported statements**: Some PostgreSQL-specific statements are not supported
+- **DELETE statement**: QuestDB does not support DELETE; use `ALTER TABLE DROP PARTITION` instead
+
+## Performance considerations
+
+- Use **prepared statements** with parameter binding for repeated queries
+- Enable **query caching** (enabled by default) for better performance
+- Increase `pg.pipeline.capacity` if using large batch inserts (>64 rows)
+- Configure `pg.worker.count` based on available CPU cores
+- Use **binary format** for parameters when possible to reduce serialization overhead
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Connection" icon="plug" href="/api/postgres/connection">
+    Learn how to connect using various PostgreSQL drivers
+  </Card>
+  <Card title="Queries" icon="code" href="/api/postgres/queries">
+    Execute queries via the PostgreSQL protocol
+  </Card>
+</CardGroup>
+
+## Related documentation
+
+- [Configuration reference](/docs/reference/configuration)
+- [SQL reference](/sql/introduction)
+- [InfluxDB Line Protocol](/api/influxdb-line-protocol)
+- [REST API](/api/rest)

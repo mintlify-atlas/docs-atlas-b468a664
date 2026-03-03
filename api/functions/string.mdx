@@ -1,0 +1,597 @@
+---
+title: String Functions
+description: Functions for manipulating string, varchar, and symbol types in QuestDB
+---
+
+QuestDB provides comprehensive string manipulation functions supporting STRING, VARCHAR, and SYMBOL types.
+
+## Concatenation
+
+### concat
+
+Concatenates multiple values into a string.
+
+**Signature:** `concat(V)`
+
+**Parameters:**
+- `V` - Variable arguments of any type
+
+**Returns:** `STRING`
+
+**Example:**
+
+```sql
+SELECT concat('Hello', ' ', 'World');
+-- Result: Hello World
+
+SELECT concat(symbol, ':', price) FROM trades;
+-- Result: AAPL:150.25
+
+SELECT concat(
+    'Trade: ', 
+    symbol, 
+    ' at ', 
+    price, 
+    ' for ', 
+    quantity, 
+    ' shares'
+) FROM trades;
+```
+
+**Notes:**
+- Accepts any type - numbers, timestamps, etc. are converted to strings
+- NULL values are ignored (not concatenated)
+- Constant expressions are optimized at compile time
+
+### || operator
+
+Concatenation operator.
+
+**Example:**
+
+```sql
+SELECT 'Hello' || ' ' || 'World';
+-- Result: Hello World
+
+SELECT symbol || ': ' || price FROM trades;
+```
+
+## Length Functions
+
+### length
+
+Returns character length of string.
+
+**Signature:** `length(S)`
+
+**Parameters:**
+- `S` - STRING, VARCHAR, or SYMBOL
+
+**Returns:** `INT`
+
+**Example:**
+
+```sql
+SELECT length('Hello');
+-- Result: 5
+
+SELECT symbol, length(symbol) FROM trades;
+```
+
+### length_bytes
+
+Returns byte length of string (UTF-8 encoding).
+
+**Signature:** `length_bytes(S)`
+
+**Parameters:**
+- `S` - STRING or VARCHAR
+
+**Returns:** `INT`
+
+**Example:**
+
+```sql
+SELECT length_bytes('Hello');
+-- Result: 5
+
+SELECT length_bytes('日本');
+-- Result: 6 (3 bytes per character)
+```
+
+## Case Conversion
+
+### upper
+
+Converts string to uppercase.
+
+**Signature:** `upper(S)`
+
+**Parameters:**
+- `S` - STRING, VARCHAR, or SYMBOL
+
+**Returns:** Same type as input
+
+**Example:**
+
+```sql
+SELECT upper('hello');
+-- Result: HELLO
+
+SELECT upper(symbol) FROM trades;
+```
+
+### lower
+
+Converts string to lowercase.
+
+**Signature:** `lower(S)`
+
+**Parameters:**
+- `S` - STRING, VARCHAR, or SYMBOL
+
+**Returns:** Same type as input
+
+**Example:**
+
+```sql
+SELECT lower('HELLO');
+-- Result: hello
+
+SELECT * FROM trades WHERE lower(symbol) = 'aapl';
+```
+
+## Substring Functions
+
+### substring
+
+Extracts substring from string.
+
+**Signature:** `substring(SII)` or `substr(SII)`
+
+**Parameters:**
+- `S` - STRING, VARCHAR, or SYMBOL
+- First `I` - Start position (1-based)
+- Second `I` - Length
+
+**Returns:** Same type as input
+
+**Example:**
+
+```sql
+SELECT substring('Hello World', 1, 5);
+-- Result: Hello
+
+SELECT substring('Hello World', 7, 5);
+-- Result: World
+
+SELECT substring(description, 1, 100) FROM products;
+```
+
+### left
+
+Extracts leftmost characters.
+
+**Signature:** `left(SI)`
+
+**Parameters:**
+- `S` - STRING, VARCHAR, or SYMBOL
+- `I` - Number of characters
+
+**Returns:** Same type as input
+
+**Example:**
+
+```sql
+SELECT left('Hello World', 5);
+-- Result: Hello
+```
+
+### right
+
+Extracts rightmost characters.
+
+**Signature:** `right(SI)`
+
+**Parameters:**
+- `S` - STRING, VARCHAR, or SYMBOL
+- `I` - Number of characters
+
+**Returns:** Same type as input
+
+**Example:**
+
+```sql
+SELECT right('Hello World', 5);
+-- Result: World
+```
+
+## Search Functions
+
+### strpos
+
+Finds position of substring (1-based, 0 if not found).
+
+**Signature:** `strpos(SS)`
+
+**Parameters:**
+- First `S` - String to search in
+- Second `S` - Substring to find
+
+**Returns:** `INT`
+
+**Example:**
+
+```sql
+SELECT strpos('Hello World', 'World');
+-- Result: 7
+
+SELECT strpos('Hello World', 'Foo');
+-- Result: 0
+
+SELECT * FROM logs WHERE strpos(message, 'ERROR') > 0;
+```
+
+### position
+
+Alias for `strpos()`.
+
+**Signature:** `position(SS)`
+
+**Parameters:**
+- First `S` - String to search in
+- Second `S` - Substring to find
+
+**Returns:** `INT`
+
+## Pattern Matching
+
+### starts_with
+
+Checks if string starts with prefix.
+
+**Signature:** `starts_with(SS)`
+
+**Parameters:**
+- First `S` - String to check
+- Second `S` - Prefix
+
+**Returns:** `BOOLEAN`
+
+**Example:**
+
+```sql
+SELECT starts_with('Hello World', 'Hello');
+-- Result: true
+
+SELECT * FROM trades WHERE starts_with(symbol, 'AA');
+```
+
+### LIKE operator
+
+Pattern matching with wildcards.
+
+**Example:**
+
+```sql
+SELECT * FROM trades WHERE symbol LIKE 'AA%';
+-- Matches AAPL, AAL, etc.
+
+SELECT * FROM trades WHERE symbol LIKE '_AA_';
+-- _ matches single character
+```
+
+### ~ operator
+
+Regular expression matching.
+
+**Example:**
+
+```sql
+SELECT * FROM trades WHERE symbol ~ '^[A-C]';
+-- Symbols starting with A, B, or C
+
+SELECT * FROM logs WHERE message ~ 'ERROR|WARN';
+```
+
+## Trimming Functions
+
+### trim
+
+Removes leading and trailing whitespace.
+
+**Signature:** `trim(S)`
+
+**Parameters:**
+- `S` - STRING or VARCHAR
+
+**Returns:** Same type as input
+
+**Example:**
+
+```sql
+SELECT trim('  Hello World  ');
+-- Result: Hello World
+```
+
+### ltrim
+
+Removes leading whitespace.
+
+**Signature:** `ltrim(S)`
+
+**Parameters:**
+- `S` - STRING or VARCHAR
+
+**Returns:** Same type as input
+
+**Example:**
+
+```sql
+SELECT ltrim('  Hello World  ');
+-- Result: Hello World  
+```
+
+### rtrim
+
+Removes trailing whitespace.
+
+**Signature:** `rtrim(S)`
+
+**Parameters:**
+- `S` - STRING or VARCHAR
+
+**Returns:** Same type as input
+
+**Example:**
+
+```sql
+SELECT rtrim('  Hello World  ');
+-- Result:   Hello World
+```
+
+## Padding Functions
+
+### lpad
+
+Pads string on left to specified length.
+
+**Signature:** `lpad(SIS)` or `lpad(SI)`
+
+**Parameters:**
+- First `S` - String to pad
+- `I` - Target length
+- Second `S` - Padding character (optional, defaults to space)
+
+**Returns:** Same type as input
+
+**Example:**
+
+```sql
+SELECT lpad('42', 5, '0');
+-- Result: 00042
+
+SELECT lpad(symbol, 10) FROM trades;
+```
+
+### rpad
+
+Pads string on right to specified length.
+
+**Signature:** `rpad(SIS)` or `rpad(SI)`
+
+**Parameters:**
+- First `S` - String to pad
+- `I` - Target length
+- Second `S` - Padding character (optional, defaults to space)
+
+**Returns:** Same type as input
+
+**Example:**
+
+```sql
+SELECT rpad('Hello', 10, '.');
+-- Result: Hello.....
+```
+
+## Replace Functions
+
+### replace
+
+Replaces all occurrences of substring.
+
+**Signature:** `replace(SSS)`
+
+**Parameters:**
+- First `S` - Source string
+- Second `S` - Substring to find
+- Third `S` - Replacement string
+
+**Returns:** Same type as input
+
+**Example:**
+
+```sql
+SELECT replace('Hello World', 'World', 'Universe');
+-- Result: Hello Universe
+
+SELECT replace(description, 'old', 'new') FROM products;
+```
+
+## Splitting Functions
+
+### split_part
+
+Extracts field from delimited string.
+
+**Signature:** `split_part(SSI)`
+
+**Parameters:**
+- First `S` - String to split
+- Second `S` - Delimiter
+- `I` - Field number (1-based)
+
+**Returns:** Same type as input
+
+**Example:**
+
+```sql
+SELECT split_part('apple,banana,cherry', ',', 2);
+-- Result: banana
+
+SELECT split_part(full_name, ' ', 1) as first_name FROM users;
+```
+
+## Hashing Functions
+
+### md5
+
+Computes MD5 hash.
+
+**Signature:** `md5(S)`
+
+**Parameters:**
+- `S` - STRING, VARCHAR, or BINARY
+
+**Returns:** `STRING` (hex)
+
+**Example:**
+
+```sql
+SELECT md5('Hello World');
+-- Result: b10a8db164e0754105b7a99be72e3fe5
+```
+
+### sha1
+
+Computes SHA-1 hash.
+
+**Signature:** `sha1(S)`
+
+**Parameters:**
+- `S` - STRING, VARCHAR, or BINARY
+
+**Returns:** `STRING` (hex)
+
+**Example:**
+
+```sql
+SELECT sha1('Hello World');
+-- Result: 0a4d55a8d778e5022fab701977c5d840bbc486d0
+```
+
+### sha256
+
+Computes SHA-256 hash.
+
+**Signature:** `sha256(S)`
+
+**Parameters:**
+- `S` - STRING, VARCHAR, or BINARY
+
+**Returns:** `STRING` (hex)
+
+**Example:**
+
+```sql
+SELECT sha256('Hello World');
+-- Result: a591a6d40bf420404a011733cfb7b190d62c65bf0bcda32b57b277d9ad9f146e
+```
+
+## Type Conversion
+
+### to_char
+
+Converts value to string.
+
+**Signature:** `to_char(V)`
+
+**Parameters:**
+- `V` - Any value
+
+**Returns:** `STRING`
+
+**Example:**
+
+```sql
+SELECT to_char(123);
+-- Result: 123
+
+SELECT to_char(price) FROM trades;
+```
+
+## Utility Functions
+
+### quote_ident
+
+Quotes identifier for SQL.
+
+**Signature:** `quote_ident(S)`
+
+**Parameters:**
+- `S` - STRING or VARCHAR
+
+**Returns:** `STRING`
+
+**Example:**
+
+```sql
+SELECT quote_ident('my table');
+-- Result: "my table"
+```
+
+### size_pretty
+
+Formats byte size in human-readable format.
+
+**Signature:** `size_pretty(L)`
+
+**Parameters:**
+- `L` - LONG (bytes)
+
+**Returns:** `STRING`
+
+**Example:**
+
+```sql
+SELECT size_pretty(1024);
+-- Result: 1.0 KiB
+
+SELECT size_pretty(1048576);
+-- Result: 1.0 MiB
+```
+
+## String Aggregation
+
+See [Aggregation Functions](/api/functions/aggregation/) for:
+- `string_agg()` - Concatenate strings with separator
+- `string_distinct_agg()` - Concatenate unique strings
+
+## Performance Notes
+
+### String Types
+
+- **SYMBOL**: Internalized strings, best for repeated values
+- **STRING**: Variable-length UTF-16 strings
+- **VARCHAR**: Variable-length UTF-8 strings
+
+### Optimization
+
+- String functions avoid allocations where possible
+- Constant expressions are evaluated at compile time
+- Use SYMBOL type for frequently repeated strings
+
+## NULL Handling
+
+Most string functions return NULL if any argument is NULL.
+
+Exceptions:
+- `concat()` ignores NULL values
+- Length functions return NULL for NULL input
+
+## See Also
+
+- [STRING Data Type](/reference/datatypes/#string)
+- [SYMBOL Data Type](/reference/datatypes/#symbol)
+- [VARCHAR Data Type](/reference/datatypes/#varchar)
+- [Pattern Matching](/reference/sql/where/#pattern-matching)

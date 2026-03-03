@@ -1,0 +1,332 @@
+---
+title: .NET client
+description: QuestDB .NET client for C# and F# applications
+---
+
+The QuestDB .NET client provides an idiomatic C# API for ingesting data using the InfluxDB Line Protocol.
+
+## Installation
+
+<CodeGroup>
+```bash .NET CLI
+dotnet add package QuestDB.Net
+```
+
+```xml PackageReference
+<PackageReference Include="QuestDB.Net" Version="1.0.0" />
+```
+
+```powershell Package Manager
+Install-Package QuestDB.Net
+```
+</CodeGroup>
+
+## Quick start
+
+```csharp
+using QuestDB;
+using System;
+using System.Threading.Tasks;
+
+class Program
+{
+    static async Task Main(string[] args)
+    {
+        using var sender = Sender.New("http::addr=localhost:9000;");
+        
+        await sender.ConnectAsync();
+        
+        sender
+            .Table("trades")
+            .Symbol("symbol", "ETH-USD")
+            .Symbol("side", "sell")
+            .Column("price", 2615.54)
+            .Column("amount", 0.00044)
+            .AtNow();
+        
+        await sender.FlushAsync();
+    }
+}
+```
+
+## Configuration
+
+```csharp
+// HTTP with authentication
+using var sender = Sender.New(
+    "http::addr=localhost:9000;username=admin;password=quest;"
+);
+
+// TCP with authentication
+using var tcpSender = Sender.New(
+    "tcp::addr=localhost:9009;username=admin;token=your-token;"
+);
+```
+
+### Configuration options
+
+<ParamField path="protocol" type="string">
+  `http` or `tcp`
+</ParamField>
+
+<ParamField path="addr" type="string" required>
+  Server address (host:port)
+</ParamField>
+
+<ParamField path="username" type="string">
+  Authentication username
+</ParamField>
+
+<ParamField path="password" type="string">
+  Authentication password (HTTP)
+</ParamField>
+
+<ParamField path="token" type="string">
+  Authentication token (TCP)
+</ParamField>
+
+## Data types
+
+```csharp
+using var sender = Sender.New("http::addr=localhost:9000;");
+await sender.ConnectAsync();
+
+sender
+    .Table("sensors")
+    .Symbol("location", "warehouse-1")        // Symbol
+    .Column("sensor_id", 12345L)              // long
+    .Column("temperature", 23.5)              // double
+    .Column("status", "active")               // string
+    .Column("is_online", true)                // bool
+    .Column("measured_at", DateTime.UtcNow)   // DateTime
+    .AtNow();
+
+await sender.FlushAsync();
+```
+
+## Batching
+
+```csharp
+using var sender = Sender.New("http::addr=localhost:9000;");
+await sender.ConnectAsync();
+
+// Send 1000 rows
+for (int i = 0; i < 1000; i++)
+{
+    sender
+        .Table("metrics")
+        .Symbol("host", $"server-{i % 10}")
+        .Column("cpu", (double)(i % 100))
+        .Column("memory", (double)((i * 2) % 100))
+        .AtNow();
+}
+
+await sender.FlushAsync();
+```
+
+## Auto-flush
+
+```csharp
+using var sender = Sender.New(
+    "http::addr=localhost:9000;auto_flush=on;auto_flush_rows=1000;"
+);
+await sender.ConnectAsync();
+
+// Automatically flushes after 1000 rows
+for (int i = 0; i < 5000; i++)
+{
+    sender
+        .Table("events")
+        .Symbol("type", "page_view")
+        .Column("url", $"/page-{i}")
+        .AtNow();
+}
+
+// Flush remaining rows
+await sender.FlushAsync();
+```
+
+## Error handling
+
+```csharp
+using QuestDB;
+using System;
+
+try
+{
+    using var sender = Sender.New("http::addr=localhost:9000;");
+    await sender.ConnectAsync();
+    
+    sender
+        .Table("trades")
+        .Symbol("symbol", "BTC-USD")
+        .Column("price", 50000.0)
+        .AtNow();
+    
+    await sender.FlushAsync();
+}
+catch (IngressException ex)
+{
+    Console.WriteLine($"Ingestion error: {ex.Message}");
+}
+catch (Exception ex)
+{
+    Console.WriteLine($"Unexpected error: {ex.Message}");
+}
+```
+
+## Async/await patterns
+
+```csharp
+using QuestDB;
+using System;
+using System.Threading;
+using System.Threading.Tasks;
+
+class MetricsCollector
+{
+    private readonly Sender _sender;
+    private readonly CancellationTokenSource _cts;
+    
+    public MetricsCollector()
+    {
+        _sender = Sender.New("http::addr=localhost:9000;");
+        _cts = new CancellationTokenSource();
+    }
+    
+    public async Task StartAsync()
+    {
+        await _sender.ConnectAsync();
+        
+        while (!_cts.Token.IsCancellationRequested)
+        {
+            _sender
+                .Table("system_metrics")
+                .Symbol("host", "server-1")
+                .Column("cpu", GetCpuUsage())
+                .Column("memory", GetMemoryUsage())
+                .AtNow();
+            
+            await _sender.FlushAsync();
+            
+            await Task.Delay(TimeSpan.FromSeconds(1), _cts.Token);
+        }
+    }
+    
+    public void Stop()
+    {
+        _cts.Cancel();
+        _sender.Dispose();
+    }
+    
+    private double GetCpuUsage() => 45.2;
+    private double GetMemoryUsage() => 62.8;
+}
+```
+
+## ASP.NET Core integration
+
+```csharp
+using Microsoft.AspNetCore.Builder;
+using Microsoft.Extensions.DependencyInjection;
+using QuestDB;
+
+var builder = WebApplication.CreateBuilder(args);
+
+// Register sender as singleton
+builder.Services.AddSingleton<Sender>(sp =>
+{
+    var sender = Sender.New("http::addr=localhost:9000;");
+    sender.ConnectAsync().Wait();
+    return sender;
+});
+
+var app = builder.Build();
+
+app.MapPost("/metrics", async (Sender sender, MetricData data) =>
+{
+    sender
+        .Table("api_requests")
+        .Symbol("endpoint", data.Endpoint)
+        .Symbol("method", data.Method)
+        .Column("status", data.Status)
+        .AtNow();
+    
+    await sender.FlushAsync();
+    return Results.Ok();
+});
+
+app.Run();
+
+record MetricData(string Endpoint, string Method, int Status);
+```
+
+## Thread safety
+
+<Warning>
+The sender is **not** thread-safe. Use dependency injection with scoped lifetime or create one sender per thread.
+</Warning>
+
+```csharp
+using System;
+using System.Collections.Generic;
+using System.Threading.Tasks;
+using QuestDB;
+
+class Program
+{
+    static async Task Main()
+    {
+        var tasks = new List<Task>();
+        
+        // Launch 10 workers, each with its own sender
+        for (int i = 0; i < 10; i++)
+        {
+            int workerId = i;
+            tasks.Add(Task.Run(async () => await WorkerAsync(workerId)));
+        }
+        
+        await Task.WhenAll(tasks);
+    }
+    
+    static async Task WorkerAsync(int id)
+    {
+        using var sender = Sender.New("http::addr=localhost:9000;");
+        await sender.ConnectAsync();
+        
+        for (int i = 0; i < 100; i++)
+        {
+            sender
+                .Table("worker_metrics")
+                .Symbol("worker_id", $"worker-{id}")
+                .Column("iteration", (long)i)
+                .AtNow();
+        }
+        
+        await sender.FlushAsync();
+    }
+}
+```
+
+## Performance tips
+
+<Tip>
+Use HTTP protocol with auto-flush for optimal performance in .NET applications.
+</Tip>
+
+1. **Enable auto-flush**: Let the client handle batching
+2. **Use HTTP**: Better throughput than TCP for most workloads
+3. **Reuse sender**: Create once per thread/scope
+4. **Async all the way**: Use async/await consistently
+5. **Dispose properly**: Use `using` statements
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="ILP Reference" icon="book" href="/api/ilp/overview">
+    Learn about the protocol
+  </Card>
+  <Card title="NuGet" icon="microsoft" href="https://www.nuget.org/packages/QuestDB.Net">
+    View on NuGet
+  </Card>
+</CardGroup>

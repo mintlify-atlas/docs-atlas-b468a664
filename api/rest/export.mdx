@@ -1,0 +1,443 @@
+---
+title: Export Endpoint
+description: Export query results using the /exp REST API endpoint
+---
+
+The `/exp` endpoint executes SQL queries and exports results as CSV or Parquet files.
+
+## Endpoint
+
+```
+GET /exp
+```
+
+## Query Parameters
+
+<ParamField query="query" type="string" required>
+  SQL SELECT query to execute. Must be URL-encoded.
+  
+  Only `SELECT` queries are supported. INSERT, UPDATE, and DDL statements will return an error.
+</ParamField>
+
+<ParamField query="limit" type="string">
+  Limit the number of rows exported. Format: `limit` or `skip,limit`.
+  
+  Examples:
+  - `limit=1000` - export first 1000 rows
+  - `limit=100,500` - skip 100 rows, export next 500
+</ParamField>
+
+<ParamField query="count" type="boolean" default="false">
+  When `true`, only count rows without exporting data.
+</ParamField>
+
+<ParamField query="nm" type="boolean" default="false">
+  No metadata. When `true`, exclude column headers from CSV export.
+</ParamField>
+
+<ParamField query="filename" type="string">
+  Name of the downloaded file (without extension). Extension is added automatically based on format.
+  
+  If not specified:
+  - CSV exports use `questdb-query-<timestamp>.csv`
+  - Parquet exports use `questdb-query-<timestamp>.parquet`
+</ParamField>
+
+<ParamField query="delimiter" type="string" default=",">
+  CSV field delimiter (CSV format only). Common values:
+  - `,` - Comma (default)
+  - `\t` - Tab (URL-encoded as `%09`)
+  - `;` - Semicolon
+  - `|` - Pipe
+</ParamField>
+
+<ParamField query="fmt" type="string" default="csv">
+  Export format:
+  - `csv` - Comma-separated values (default)
+  - `parquet` - Apache Parquet columnar format
+</ParamField>
+
+<ParamField query="timeout" type="integer">
+  Query timeout in milliseconds. Overrides the `Statement-Timeout` header.
+</ParamField>
+
+### Parquet-Specific Parameters
+
+These parameters only apply when `fmt=parquet`:
+
+<ParamField query="compression_codec" type="string" default="SNAPPY">
+  Compression algorithm for Parquet files:
+  - `NONE` - No compression
+  - `SNAPPY` - Snappy (default, good balance)
+  - `GZIP` - GZIP (better compression, slower)
+  - `LZ4` - LZ4 (fast compression)
+  - `ZSTD` - Zstandard (best compression)
+  - `BROTLI` - Brotli
+  - `LZO` - LZO
+</ParamField>
+
+<ParamField query="compression_level" type="integer">
+  Compression level (codec-dependent). Higher values = better compression but slower.
+  
+  Valid ranges depend on codec:
+  - GZIP: 1-9 (default 6)
+  - ZSTD: 1-22 (default 3)
+  - BROTLI: 1-11 (default 4)
+</ParamField>
+
+<ParamField query="row_group_size" type="integer" default="1048576">
+  Number of rows per Parquet row group. Affects query performance and file size.
+  
+  Typical values: 100,000 to 1,000,000
+</ParamField>
+
+<ParamField query="data_page_size" type="integer" default="1048576">
+  Size of data pages in bytes (1MB default). Smaller pages enable more fine-grained reads.
+</ParamField>
+
+<ParamField query="statistics_enabled" type="boolean" default="true">
+  When `true`, includes column statistics in Parquet metadata for query optimization.
+</ParamField>
+
+<ParamField query="parquet_version" type="integer" default="1">
+  Parquet format version:
+  - `1` - Parquet 1.0 (default, maximum compatibility)
+  - `2` - Parquet 2.0 (better encoding, requires newer readers)
+</ParamField>
+
+<ParamField query="raw_array_encoding" type="boolean" default="false">
+  When `true`, uses raw array encoding for better performance with array types.
+</ParamField>
+
+<ParamField query="rmode" type="string">
+  Response mode. Set to `nodelay` to start file download immediately (streams the first bytes before query completes).
+</ParamField>
+
+## Request Headers
+
+<ParamField header="Statement-Timeout" type="integer">
+  Query timeout in milliseconds. Can be overridden by the `timeout` query parameter.
+  
+  Default: 60000ms (60 seconds) for Parquet, no timeout for CSV
+</ParamField>
+
+<ParamField header="Authorization" type="string">
+  HTTP Basic authentication credentials (if authentication is enabled).
+</ParamField>
+
+## Response
+
+### CSV Response
+
+Returns CSV data with appropriate headers:
+
+```
+Content-Type: text/csv; charset=utf-8
+Content-Disposition: attachment; filename="<filename>.csv"
+```
+
+The first row contains column names (unless `nm=true`).
+
+### Parquet Response
+
+Returns Parquet binary data:
+
+```
+Content-Type: application/vnd.apache.parquet
+Content-Disposition: attachment; filename="<filename>.parquet"
+```
+
+## Examples
+
+### Export as CSV
+
+```bash
+curl "http://localhost:9000/exp?query=SELECT+*+FROM+sensors+LIMIT+1000" \
+  -o sensors.csv
+```
+
+### Export as Parquet
+
+```bash
+curl "http://localhost:9000/exp?query=SELECT+*+FROM+sensors&fmt=parquet" \
+  -o sensors.parquet
+```
+
+### Export with Custom Filename
+
+```bash
+curl "http://localhost:9000/exp?query=SELECT+*+FROM+sensors&filename=sensor_data" \
+  -o sensor_data.csv
+```
+
+The file will be named `sensor_data.csv`.
+
+### Export with Tab Delimiter
+
+```bash
+curl "http://localhost:9000/exp?query=SELECT+*+FROM+sensors&delimiter=%09" \
+  -o sensors.tsv
+```
+
+### Export Without Headers
+
+```bash
+curl "http://localhost:9000/exp?query=SELECT+*+FROM+sensors&nm=true" \
+  -o sensors.csv
+```
+
+### Parquet with ZSTD Compression
+
+```bash
+curl "http://localhost:9000/exp?query=SELECT+*+FROM+sensors&fmt=parquet&compression_codec=ZSTD&compression_level=9" \
+  -o sensors.parquet
+```
+
+### Parquet with Custom Row Groups
+
+```bash
+curl -G "http://localhost:9000/exp" \
+  --data-urlencode "query=SELECT * FROM sensors" \
+  -d "fmt=parquet" \
+  -d "row_group_size=500000" \
+  -d "data_page_size=524288" \
+  -o sensors.parquet
+```
+
+### Export with Aggregation
+
+```bash
+curl -G "http://localhost:9000/exp" \
+  --data-urlencode "query=SELECT sensor_id, avg(temperature), max(humidity) FROM sensors WHERE timestamp > '2024-01-01' GROUP BY sensor_id" \
+  -o sensor_stats.csv
+```
+
+### Export with Timeout
+
+```bash
+curl -H "Statement-Timeout: 30000" \
+  "http://localhost:9000/exp?query=SELECT+*+FROM+large_table&fmt=parquet" \
+  -o data.parquet
+```
+
+### Streaming Export (No Delay)
+
+```bash
+curl "http://localhost:9000/exp?query=SELECT+*+FROM+sensors&fmt=parquet&rmode=nodelay" \
+  -o sensors.parquet
+```
+
+With `rmode=nodelay`, the download starts immediately with the Parquet magic bytes, enabling progress indication in browsers.
+
+## CSV Format Details
+
+### Data Encoding
+
+- **Strings**: Quoted with double quotes, special characters escaped
+- **Numbers**: Raw numeric values
+- **Timestamps**: ISO 8601 format (`2024-01-01T00:00:00.000000Z`)
+- **NULL values**: Empty field (consecutive delimiters)
+- **Boolean**: `true` or `false`
+
+Example output:
+
+```csv
+timestamp,sensor_id,temperature,humidity,status
+2024-01-01T00:00:00.000000Z,sensor_1,23.5,45.2,"online"
+2024-01-01T00:01:00.000000Z,sensor_2,24.1,46.8,"online"
+2024-01-01T00:02:00.000000Z,sensor_1,,45.5,"offline"
+```
+
+### Special Characters
+
+Strings containing the delimiter, newlines, or quotes are automatically quoted and escaped:
+
+```csv
+id,description
+1,"This is a value, with comma"
+2,"This has a ""quoted"" word"
+3,"This has a
+newline"
+```
+
+## Parquet Format Details
+
+### Schema Mapping
+
+QuestDB types map to Parquet types:
+
+| QuestDB Type | Parquet Type | Physical Type |
+|--------------|--------------|---------------|
+| BOOLEAN | BOOLEAN | BOOLEAN |
+| BYTE | INT8 | INT32 |
+| SHORT | INT16 | INT32 |
+| INT | INT32 | INT32 |
+| LONG | INT64 | INT64 |
+| FLOAT | FLOAT | FLOAT |
+| DOUBLE | DOUBLE | DOUBLE |
+| STRING | STRING | BYTE_ARRAY |
+| SYMBOL | STRING | BYTE_ARRAY |
+| TIMESTAMP | TIMESTAMP(MICROS) | INT64 |
+| DATE | DATE | INT32 |
+| UUID | UUID | FIXED_LEN_BYTE_ARRAY(16) |
+| IPv4 | INT32 | INT32 |
+
+### Performance Characteristics
+
+**Parquet benefits:**
+- Columnar storage enables efficient compression (typically 5-10x smaller than CSV)
+- Fast analytical queries (column pruning, predicate pushdown)
+- Schema embedded in file
+- Type-safe (preserves numeric precision)
+
+**CSV benefits:**
+- Human-readable
+- Universal compatibility
+- Simple parsing
+- No schema required
+
+### Compression Comparison
+
+| Codec | Compression Ratio | Speed | Use Case |
+|-------|-------------------|-------|----------|
+| NONE | 1.0x | Fastest | Already compressed data |
+| LZ4 | 2-3x | Very fast | Real-time streaming |
+| SNAPPY | 2-4x | Fast | General purpose (default) |
+| ZSTD | 3-7x | Medium | Best balance |
+| GZIP | 3-6x | Slow | Maximum compatibility |
+| BROTLI | 4-8x | Slowest | Best compression |
+
+## Error Handling
+
+### Invalid Query
+
+```bash
+curl "http://localhost:9000/exp?query=INSERT+INTO+sensors+VALUES(1,2,3)"
+```
+
+<ResponseExample>
+```json Response (400)
+{
+  "query": "INSERT INTO sensors VALUES(1,2,3)",
+  "error": "/exp endpoint only accepts SELECT",
+  "position": 0
+}
+```
+</ResponseExample>
+
+### Table Not Found
+
+```bash
+curl "http://localhost:9000/exp?query=SELECT+*+FROM+nonexistent"
+```
+
+<ResponseExample>
+```json Response (400)
+{
+  "query": "SELECT * FROM nonexistent",
+  "error": "table does not exist [table=nonexistent]",
+  "position": 14
+}
+```
+</ResponseExample>
+
+### Invalid Parquet Option
+
+```bash
+curl "http://localhost:9000/exp?query=SELECT+*+FROM+sensors&fmt=parquet&compression_codec=INVALID"
+```
+
+<ResponseExample>
+```json Response (400)
+{
+  "error": "invalid compression codec[INVALID], expected one of: NONE, SNAPPY, GZIP, LZ4, ZSTD, BROTLI, LZO",
+  "position": 0
+}
+```
+</ResponseExample>
+
+## Use Cases
+
+### Data Analysis
+
+Export data for analysis in Python, R, or other tools:
+
+```bash
+# Export to Parquet for Pandas
+curl "http://localhost:9000/exp?query=SELECT+*+FROM+sensors+WHERE+timestamp+>+'2024-01-01'&fmt=parquet" \
+  -o sensors.parquet
+```
+
+```python
+import pandas as pd
+df = pd.read_parquet('sensors.parquet')
+```
+
+### Data Archival
+
+Export compressed Parquet for long-term storage:
+
+```bash
+curl "http://localhost:9000/exp?query=SELECT+*+FROM+old_data&fmt=parquet&compression_codec=ZSTD&compression_level=9" \
+  -o archive_$(date +%Y%m%d).parquet
+```
+
+### Report Generation
+
+Generate CSV reports for business users:
+
+```bash
+curl -G "http://localhost:9000/exp" \
+  --data-urlencode "query=SELECT date_trunc('day', timestamp) as day, count(*) as events FROM logs WHERE timestamp > dateadd('d', -30, now()) GROUP BY day ORDER BY day" \
+  -d "filename=monthly_report" \
+  -o monthly_report.csv
+```
+
+### Data Pipeline Integration
+
+Export to cloud storage:
+
+```bash
+#!/bin/bash
+# Export and upload to S3
+curl "http://localhost:9000/exp?query=SELECT+*+FROM+sensors&fmt=parquet" \
+  -o /tmp/sensors.parquet
+aws s3 cp /tmp/sensors.parquet s3://my-bucket/data/
+```
+
+## Best Practices
+
+<Tip>
+  **Use Parquet for large exports**: Parquet compression typically reduces file size by 5-10x compared to CSV.
+</Tip>
+
+<Tip>
+  **Optimize row group size**: For analytical workloads, use `row_group_size=1000000`. For selective queries, use smaller row groups (100,000-500,000).
+</Tip>
+
+<Tip>
+  **Enable statistics**: Keep `statistics_enabled=true` (default) for query optimization in downstream tools like Spark, Presto, or DuckDB.
+</Tip>
+
+<Warning>
+  **Memory usage**: Large exports consume memory proportional to `row_group_size`. Monitor memory usage when exporting huge datasets.
+</Warning>
+
+<Info>
+  **Streaming mode**: Use `rmode=nodelay` for Parquet exports to start downloads immediately in web browsers, providing better UX for large queries.
+</Info>
+
+## Limits and Configuration
+
+Configure export limits in `server.conf`:
+
+```properties
+# Maximum concurrent export connections
+http.export.connection.limit=-1
+
+# Export query timeout (Parquet default)
+http.export.default.timeout=60s
+
+# Temporary directory for Parquet exports
+http.export.parquet.tmp.dir=/tmp/questdb
+```

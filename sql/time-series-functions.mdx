@@ -1,0 +1,464 @@
+---
+title: Time-Series Functions
+description: SAMPLE BY, LATEST ON, and time-based query functions for time-series analysis.
+---
+
+QuestDB provides specialized SQL functions for time-series data analysis, including temporal aggregation, latest value selection, and time-based operations.
+
+## SAMPLE BY
+
+SAMPLE BY aggregates time-series data into time buckets. It groups rows by time intervals and applies aggregate functions.
+
+### Basic SAMPLE BY
+
+```sql
+SELECT 
+    timestamp,
+    symbol,
+    avg(price) AS avg_price,
+    sum(quantity) AS total_volume
+FROM trades
+SAMPLE BY 1h;
+```
+
+**Example Data:**
+```
+symbol  price   quantity  timestamp
+AAPL    150.00  100       2023-12-28T10:15:00.000000Z
+AAPL    150.50  150       2023-12-28T10:30:00.000000Z
+AAPL    151.00  200       2023-12-28T11:10:00.000000Z
+AAPL    151.50  120       2023-12-28T11:45:00.000000Z
+```
+
+**Query Result:**
+```
+timestamp                      symbol  avg_price  total_volume
+2023-12-28T10:00:00.000000Z    AAPL    150.25     250
+2023-12-28T11:00:00.000000Z    AAPL    151.25     320
+```
+
+### Time Units
+
+Supported time units:
+
+- `s` - seconds
+- `m` - minutes
+- `h` - hours
+- `d` - days
+- `M` - months
+- `y` - years
+
+```sql
+-- Sample by different intervals
+SELECT timestamp, avg(price) FROM trades SAMPLE BY 30s;
+SELECT timestamp, avg(price) FROM trades SAMPLE BY 5m;
+SELECT timestamp, avg(price) FROM trades SAMPLE BY 1d;
+SELECT timestamp, avg(price) FROM trades SAMPLE BY 1M;
+```
+
+### SAMPLE BY with Multiple Aggregates
+
+```sql
+SELECT 
+    timestamp,
+    symbol,
+    first(price) AS open,
+    max(price) AS high,
+    min(price) AS low,
+    last(price) AS close,
+    sum(quantity) AS volume
+FROM trades
+SAMPLE BY 1h;
+```
+
+**Query Result:**
+```
+timestamp                      symbol  open    high    low     close   volume
+2023-12-28T10:00:00.000000Z    AAPL    150.00  151.00  149.50  150.75  15000
+2023-12-28T11:00:00.000000Z    AAPL    150.80  152.00  150.50  151.50  12000
+```
+
+### ALIGN TO CALENDAR
+
+Align time buckets to calendar boundaries:
+
+```sql
+SELECT 
+    timestamp,
+    symbol,
+    avg(price) AS avg_price
+FROM trades
+SAMPLE BY 1h ALIGN TO CALENDAR;
+```
+
+This aligns buckets to clock hours (00:00, 01:00, 02:00, etc.).
+
+### ALIGN TO FIRST OBSERVATION
+
+Align buckets to the first timestamp in the data:
+
+```sql
+SELECT 
+    timestamp,
+    symbol,
+    avg(price) AS avg_price
+FROM trades
+SAMPLE BY 1h ALIGN TO FIRST OBSERVATION;
+```
+
+If first observation is at 10:23:15, buckets start at 10:23:15, 11:23:15, 12:23:15, etc.
+
+### Time Zone Support
+
+Specify time zone for calendar alignment:
+
+```sql
+SELECT 
+    timestamp,
+    symbol,
+    avg(price) AS avg_price
+FROM trades
+SAMPLE BY 1h ALIGN TO CALENDAR TIME ZONE 'America/New_York';
+```
+
+Use time zone names or offsets:
+
+```sql
+-- With time zone name
+SAMPLE BY 1h ALIGN TO CALENDAR TIME ZONE 'Europe/London';
+
+-- With offset
+SAMPLE BY 1h ALIGN TO CALENDAR TIME ZONE '+01:00';
+SAMPLE BY 1h ALIGN TO CALENDAR TIME ZONE '-05:00';
+```
+
+### WITH OFFSET
+
+Shift time buckets by an offset:
+
+```sql
+SELECT 
+    timestamp,
+    symbol,
+    avg(price) AS avg_price
+FROM trades
+SAMPLE BY 1h ALIGN TO CALENDAR WITH OFFSET '00:15';
+```
+
+This shifts buckets by 15 minutes (00:15, 01:15, 02:15, etc.).
+
+Combine time zone and offset:
+
+```sql
+SELECT 
+    timestamp,
+    symbol,
+    avg(price) AS avg_price
+FROM trades
+SAMPLE BY 1h ALIGN TO CALENDAR TIME ZONE 'UTC' WITH OFFSET '00:30';
+```
+
+### FILL Strategy
+
+Handle missing data in time buckets:
+
+#### FILL(NONE)
+
+Default behavior - skip empty buckets:
+
+```sql
+SELECT timestamp, symbol, avg(price)
+FROM trades
+SAMPLE BY 1h FILL(NONE);
+```
+
+#### FILL(NULL)
+
+Include empty buckets with NULL values:
+
+```sql
+SELECT timestamp, symbol, avg(price)
+FROM trades
+SAMPLE BY 1h FILL(NULL);
+```
+
+**Query Result:**
+```
+timestamp                      symbol  avg
+2023-12-28T10:00:00.000000Z    AAPL    150.25
+2023-12-28T11:00:00.000000Z    AAPL    null
+2023-12-28T12:00:00.000000Z    AAPL    151.50
+```
+
+#### FILL(LINEAR)
+
+Interpolate values for empty buckets:
+
+```sql
+SELECT timestamp, symbol, avg(price)
+FROM trades
+SAMPLE BY 1h FILL(LINEAR);
+```
+
+#### FILL(value)
+
+Fill empty buckets with a constant:
+
+```sql
+SELECT timestamp, symbol, avg(price)
+FROM trades
+SAMPLE BY 1h FILL(0);
+```
+
+## LATEST ON
+
+LATEST ON retrieves the most recent row for each partition. It's optimized for getting the latest value per group.
+
+### Basic LATEST ON
+
+```sql
+SELECT symbol, price, timestamp
+FROM prices
+LATEST ON timestamp PARTITION BY symbol;
+```
+
+**Example Data:**
+```
+symbol  price   timestamp
+AAPL    150.00  2023-12-28T10:00:00.000000Z
+AAPL    151.00  2023-12-28T11:00:00.000000Z
+GOOG    140.00  2023-12-28T10:30:00.000000Z
+GOOG    142.00  2023-12-28T11:30:00.000000Z
+MSFT    250.00  2023-12-28T10:15:00.000000Z
+```
+
+**Query Result:**
+```
+symbol  price   timestamp
+AAPL    151.00  2023-12-28T11:00:00.000000Z
+GOOG    142.00  2023-12-28T11:30:00.000000Z
+MSFT    250.00  2023-12-28T10:15:00.000000Z
+```
+
+### LATEST ON with Multiple Partitions
+
+```sql
+SELECT exchange, symbol, price, timestamp
+FROM prices
+LATEST ON timestamp PARTITION BY exchange, symbol;
+```
+
+### LATEST ON with WHERE
+
+```sql
+SELECT symbol, price, timestamp
+FROM prices
+WHERE symbol IN ('AAPL', 'GOOG', 'MSFT')
+LATEST ON timestamp PARTITION BY symbol;
+```
+
+### LATEST ON in Subquery
+
+```sql
+SELECT symbol, price
+FROM (
+    SELECT symbol, price, timestamp
+    FROM prices
+    WHERE timestamp > dateadd('d', -7, now())
+    LATEST ON timestamp PARTITION BY symbol
+)
+WHERE price > 100
+ORDER BY symbol;
+```
+
+## Time Functions
+
+### timestamp_floor
+
+Round timestamp down to time unit:
+
+```sql
+SELECT 
+    timestamp,
+    timestamp_floor('1h', timestamp) AS hour_floor,
+    timestamp_floor('1d', timestamp) AS day_floor
+FROM trades;
+```
+
+**Query Result:**
+```
+timestamp                         hour_floor                    day_floor
+2023-12-28T10:23:45.000000Z       2023-12-28T10:00:00.000000Z   2023-12-28T00:00:00.000000Z
+2023-12-28T11:45:12.000000Z       2023-12-28T11:00:00.000000Z   2023-12-28T00:00:00.000000Z
+```
+
+### timestamp_ceil
+
+Round timestamp up to time unit:
+
+```sql
+SELECT 
+    timestamp,
+    timestamp_ceil('1h', timestamp) AS hour_ceil
+FROM trades;
+```
+
+### date_trunc
+
+Truncate timestamp to specified precision:
+
+```sql
+SELECT 
+    timestamp,
+    date_trunc('hour', timestamp) AS hour,
+    date_trunc('day', timestamp) AS day,
+    date_trunc('month', timestamp) AS month
+FROM trades;
+```
+
+### dateadd
+
+Add time interval to timestamp:
+
+```sql
+SELECT 
+    timestamp,
+    dateadd('h', 1, timestamp) AS plus_1_hour,
+    dateadd('d', -7, timestamp) AS minus_7_days
+FROM trades;
+```
+
+Time units: `s`, `m`, `h`, `d`, `M`, `y`
+
+### datediff
+
+Calculate difference between timestamps:
+
+```sql
+SELECT 
+    symbol,
+    datediff('s', prev_timestamp, timestamp) AS seconds_diff,
+    datediff('m', prev_timestamp, timestamp) AS minutes_diff
+FROM trades;
+```
+
+### Extract Date Parts
+
+```sql
+SELECT 
+    timestamp,
+    year(timestamp) AS year,
+    month(timestamp) AS month,
+    day(timestamp) AS day,
+    hour(timestamp) AS hour,
+    minute(timestamp) AS minute,
+    second(timestamp) AS second
+FROM trades;
+```
+
+**Query Result:**
+```
+timestamp                      year  month  day  hour  minute  second
+2023-12-28T10:30:45.000000Z    2023  12     28   10    30      45
+```
+
+### now()
+
+Get current timestamp:
+
+```sql
+SELECT * FROM trades
+WHERE timestamp > dateadd('h', -1, now());
+```
+
+### systimestamp()
+
+Get system timestamp (same as now()):
+
+```sql
+SELECT systimestamp() AS current_time;
+```
+
+## Time-Series Query Patterns
+
+### Hourly OHLC (Open, High, Low, Close)
+
+```sql
+SELECT 
+    timestamp,
+    symbol,
+    first(price) AS open,
+    max(price) AS high,
+    min(price) AS low,
+    last(price) AS close,
+    sum(quantity) AS volume
+FROM trades
+WHERE timestamp > dateadd('d', -1, now())
+SAMPLE BY 1h ALIGN TO CALENDAR
+ORDER BY timestamp DESC;
+```
+
+### Rolling Window Aggregation
+
+```sql
+SELECT 
+    timestamp,
+    symbol,
+    price,
+    avg(price) OVER (PARTITION BY symbol ORDER BY timestamp ROWS BETWEEN 10 PRECEDING AND CURRENT ROW) AS moving_avg_10
+FROM trades;
+```
+
+### Time-Weighted Average
+
+```sql
+SELECT 
+    timestamp,
+    symbol,
+    sum(price * datediff('s', lag(timestamp) OVER (PARTITION BY symbol ORDER BY timestamp), timestamp)) / 
+        sum(datediff('s', lag(timestamp) OVER (PARTITION BY symbol ORDER BY timestamp), timestamp)) AS time_weighted_avg
+FROM prices
+SAMPLE BY 1h;
+```
+
+### Gap Detection
+
+Find time gaps larger than threshold:
+
+```sql
+SELECT 
+    symbol,
+    timestamp,
+    lag(timestamp) OVER (PARTITION BY symbol ORDER BY timestamp) AS prev_timestamp,
+    datediff('s', lag(timestamp) OVER (PARTITION BY symbol ORDER BY timestamp), timestamp) AS gap_seconds
+FROM trades
+WHERE datediff('s', lag(timestamp) OVER (PARTITION BY symbol ORDER BY timestamp), timestamp) > 60
+ORDER BY gap_seconds DESC;
+```
+
+### Latest Value Per Symbol with Age
+
+```sql
+SELECT 
+    symbol,
+    price,
+    timestamp,
+    datediff('s', timestamp, now()) AS age_seconds
+FROM prices
+LATEST ON timestamp PARTITION BY symbol
+ORDER BY age_seconds;
+```
+
+## Performance Tips
+
+- **Designated timestamp column**: Use `TIMESTAMP(column)` in table definition for optimized time queries
+- **Partition by time**: Partition tables by DAY, MONTH, or YEAR for efficient time-range queries
+- **Filter on timestamp first**: Apply timestamp filters before other conditions
+- **Use SYMBOL for grouping keys**: SYMBOL columns are optimized for GROUP BY and PARTITION BY
+- **LATEST ON optimization**: LATEST ON is more efficient than `ROW_NUMBER() OVER (... ORDER BY timestamp DESC) = 1`
+
+## Next Steps
+
+- [Aggregations](/sql/aggregations) - Learn about aggregate functions
+- [Window Functions](/sql/window-functions) - Use analytical window functions
+- [JOIN Operations](/sql/joins) - Explore time-series joins

@@ -1,0 +1,571 @@
+---
+title: SQL Compiler (Griffin)
+description: Architecture of QuestDB's SQL compiler, covering parsing, optimization, code generation, and query execution.
+---
+
+## Overview
+
+Griffin is QuestDB's SQL compiler and execution engine. Named after the mythical creature, Griffin transforms SQL text into efficient execution plans optimized for time-series workloads.
+
+**Location:** `core/src/main/java/io/questdb/griffin/`
+
+## Architecture
+
+The SQL compiler follows a multi-stage pipeline:
+
+```
+SQL Text → Lexer → Parser → Query Model (AST) → Optimizer → Code Generator → Execution Plan
+```
+
+### Stage 1: Lexing and Parsing
+
+**Input:** SQL text string
+
+**Output:** `QueryModel` (Abstract Syntax Tree)
+
+**Key classes:**
+- `SqlParser` — Top-level parser: `io/questdb/griffin/SqlParser.java`
+- `SqlLexer` — Tokenizes SQL text
+- `ExpressionParser` — Parses expressions: `io/questdb/griffin/ExpressionParser.java`
+- `QueryModel` — AST representation: `io/questdb/griffin/model/QueryModel.java`
+
+**Example:**
+```sql
+SELECT symbol, price
+FROM trades
+WHERE price > 100
+ORDER BY ts DESC
+```
+
+Parsed into:
+```
+QueryModel {
+  columns: [symbol, price]
+  tableName: "trades"
+  whereClause: ExpressionNode(price > 100)
+  orderBy: [ts DESC]
+}
+```
+
+### Stage 2: Optimization
+
+**Input:** `QueryModel` (AST)
+
+**Output:** Optimized `QueryModel`
+
+**Key class:** `SqlOptimiser`: `io/questdb/griffin/SqlOptimiser.java`
+
+**Optimizations:**
+
+1. **Predicate pushdown** — Move filters closer to data source
+2. **Partition pruning** — Skip partitions outside time range
+3. **Index selection** — Choose best index for filter
+4. **Join reordering** — Optimize join order
+5. **Constant folding** — Evaluate constants at compile time
+6. **Subquery flattening** — Convert subqueries to joins where possible
+
+**Example optimization:**
+```sql
+-- Original
+SELECT * FROM (
+  SELECT * FROM trades WHERE symbol = 'AAPL'
+) WHERE price > 100;
+
+-- Optimized (predicate pushdown)
+SELECT * FROM trades WHERE symbol = 'AAPL' AND price > 100;
+```
+
+### Stage 3: Code Generation
+
+**Input:** Optimized `QueryModel`
+
+**Output:** `RecordCursorFactory`
+
+**Key class:** `SqlCodeGenerator`: `io/questdb/griffin/SqlCodeGenerator.java`
+
+Generates execution plan as a tree of factories:
+- Each factory creates a `RecordCursor` for data iteration
+- Factories compose to form complex plans
+- Supports lazy evaluation (only compute what's needed)
+
+**Example plan:**
+```
+FilteredRecordCursorFactory
+  ├── filter: price > 100
+  └── base: DataFrameRecordCursorFactory
+        └── reader: TableReader(trades)
+```
+
+### Stage 4: Execution
+
+**Input:** `RecordCursorFactory`
+
+**Output:** `RecordCursor` (iterator over rows)
+
+Execution is lazy:
+1. Factory creates cursor
+2. Cursor iterates row-by-row (or in batches)
+3. Each row is a `Record` with column accessors
+
+**Key interfaces:**
+- `RecordCursorFactory` — Creates cursors
+- `RecordCursor` — Iterates over records
+- `Record` — Represents a single row
+- `RecordMetadata` — Schema information
+
+## Key Classes
+
+### SqlCompiler / SqlCompilerImpl
+
+**Location:** `io/questdb/griffin/SqlCompilerImpl.java:149`
+
+**Main entry point** for SQL compilation.
+
+**Key methods:**
+- `compile(sql, context)` — Compiles SQL to `CompiledQuery`
+- `compileQuery(sql, context)` — Compiles SELECT to `RecordCursorFactory`
+- `execute(sql, context)` — Executes DDL/DML
+
+**Example usage:**
+```java
+try (SqlCompiler compiler = engine.getSqlCompiler()) {
+    CompiledQuery cq = compiler.compile("SELECT * FROM trades", context);
+    try (RecordCursorFactory factory = cq.getRecordCursorFactory()) {
+        try (RecordCursor cursor = factory.getCursor(context)) {
+            Record record = cursor.getRecord();
+            while (cursor.hasNext()) {
+                // Read record columns
+            }
+        }
+    }
+}
+```
+
+### SqlParser
+
+**Location:** `io/questdb/griffin/SqlParser.java`
+
+Parses SQL text into `QueryModel` or other model objects.
+
+**Key methods:**
+- `parseQuery(sql)` — Parses SELECT statement
+- `parseInsert(sql)` — Parses INSERT statement
+- `parseCreateTable(sql)` — Parses CREATE TABLE
+- `parseAlterTable(sql)` — Parses ALTER TABLE
+
+**Parsing strategy:**
+- Recursive descent parser
+- Zero-allocation (reuses objects from pools)
+- Error recovery (provides position of syntax errors)
+
+### ExpressionParser
+
+**Location:** `io/questdb/griffin/ExpressionParser.java`
+
+Parses SQL expressions (WHERE clauses, SELECT expressions, etc.).
+
+**Key methods:**
+- `parseExpression(sql)` — Parses expression tree
+- `parseFunction(sql)` — Parses function calls
+
+**Precedence handling:** Operator precedence table ensures correct expression trees.
+
+**Example:**
+```sql
+price > 100 AND (symbol = 'AAPL' OR symbol = 'GOOGL')
+```
+
+Parsed into:
+```
+ExpressionNode(AND)
+  ├── ExpressionNode(>)
+  │     ├── price
+  │     └── 100
+  └── ExpressionNode(OR)
+        ├── ExpressionNode(=)
+        │     ├── symbol
+        │     └── 'AAPL'
+        └── ExpressionNode(=)
+              ├── symbol
+              └── 'GOOGL'
+```
+
+### SqlCodeGenerator
+
+**Location:** `io/questdb/griffin/SqlCodeGenerator.java`
+
+Generates execution plans from optimized query models.
+
+**Key methods:**
+- `generate(queryModel, context)` — Generates `RecordCursorFactory`
+- `generateFilter(queryModel)` — Generates filter plan
+- `generateJoin(queryModel)` — Generates join plan
+- `generateGroupBy(queryModel)` — Generates aggregation plan
+
+**Factory selection:**
+- Chooses optimal factory based on query characteristics
+- Considers indexes, partition pruning, parallelism
+- Generates SIMD-accelerated code where applicable
+
+### FunctionFactory
+
+**Location:** `io/questdb/griffin/FunctionFactory.java`
+
+Base interface for SQL functions.
+
+**Implementation:**
+- Each function is a separate class (e.g., `SumDoubleGroupByFunction`)
+- Function factories registered in `FunctionFactoryCache`
+- Code generation instantiates appropriate function class
+
+**Function categories:**
+- Scalar functions (e.g., `round()`, `abs()`)
+- Aggregate functions (e.g., `sum()`, `avg()`, `count()`)
+- Window functions (e.g., `row_number()`, `rank()`)
+- Time-series functions (e.g., `sample_by()`, `fill()`)
+
+**Example:** `io/questdb/griffin/engine/functions/math/AbsIntFunctionFactory.java`
+
+## Query Execution Models
+
+### Table Scan
+
+Simple sequential scan of a table:
+
+**Factory:** `DataFrameRecordCursorFactory`
+
+**Execution:**
+1. Open table reader
+2. Iterate partitions
+3. For each partition, iterate rows
+4. Return each row as `Record`
+
+**Optimization:** Skip partitions outside time range (partition pruning)
+
+### Filtered Scan
+
+Table scan with WHERE clause:
+
+**Factory:** `FilteredRecordCursorFactory`
+
+**Execution:**
+1. Base cursor (table scan)
+2. Evaluate filter for each row
+3. Return only matching rows
+
+**Optimization:** Use indexes where applicable (bitmap index scan)
+
+### Index Scan
+
+Use bitmap index to find matching rows:
+
+**Factory:** `BitmapIndexRecordCursorFactory`
+
+**Execution:**
+1. Lookup value in bitmap index
+2. Get bitmap of matching rows
+3. Iterate only matching rows
+
+**Example:**
+```sql
+SELECT * FROM trades WHERE symbol = 'AAPL';
+```
+
+If `symbol` has a bitmap index:
+1. Lookup "AAPL" in index → bitmap
+2. Iterate only rows where bitmap[i] = 1
+
+**Performance:** O(log n) lookup + O(k) scan (k = matching rows)
+
+### Hash Join
+
+Join two tables using a hash table:
+
+**Factory:** `HashJoinRecordCursorFactory`
+
+**Execution:**
+1. **Build phase:** Scan smaller table, build hash table on join key
+2. **Probe phase:** Scan larger table, probe hash table for matches
+3. Return joined rows
+
+**Join types supported:**
+- `INNER JOIN`
+- `LEFT JOIN`
+- `OUTER JOIN`
+- `CROSS JOIN`
+
+**Optimization:** Reorder joins to build hash table on smaller table
+
+### ASOF Join
+
+Time-series specific join (join on nearest timestamp):
+
+**Factory:** `AsOfJoinRecordCursorFactory`
+
+**Use case:** Join time-series tables with different sampling rates
+
+**Example:**
+```sql
+SELECT *
+FROM trades
+ASOf JOIN quotes ON (symbol)
+```
+
+For each trade, find the most recent quote with the same symbol.
+
+**Performance:** O(n + m) with timestamp index
+
+### SPLICE Join
+
+Time-series full outer join:
+
+**Factory:** `SpliceJoinRecordCursorFactory`
+
+**Use case:** Merge two time-series tables by timestamp
+
+**Example:**
+```sql
+SELECT *
+FROM trades
+SPLICE JOIN quotes ON (ts)
+```
+
+Interleave rows from both tables ordered by timestamp.
+
+### Group By / Aggregation
+
+Aggregate data by key:
+
+**Factory:** `GroupByRecordCursorFactory`
+
+**Execution:**
+1. Scan input cursor
+2. For each row, lookup/create group in hash table
+3. Update aggregates for group
+4. Return aggregated results
+
+**Aggregate functions:**
+- `sum()`, `avg()`, `min()`, `max()`, `count()`
+- `first()`, `last()` (time-series specific)
+- `ksum()` (Kahan summation for precision)
+
+**Optimization:** Use SIMD for aggregations (see [SIMD Optimizations](/development/simd-optimization))
+
+### Sample By
+
+Time-series specific downsampling:
+
+**Factory:** `SampleByRecordCursorFactory`
+
+**Use case:** Aggregate data into time buckets
+
+**Example:**
+```sql
+SELECT ts, symbol, avg(price), sum(volume)
+FROM trades
+SAMPLE BY 1h;
+```
+
+Aggregates data into 1-hour buckets.
+
+**Alignment:** Buckets aligned to calendar (e.g., midnight for daily buckets)
+
+**Fill modes:**
+- `FILL(NONE)` — Skip empty buckets
+- `FILL(NULL)` — Return NULL for empty buckets
+- `FILL(LINEAR)` — Interpolate missing values
+- `FILL(PREV)` — Forward-fill previous value
+
+### LATEST ON
+
+Deduplication by key (return latest row per key):
+
+**Factory:** `LatestByAllIndexedRecordCursorFactory`
+
+**Example:**
+```sql
+SELECT * FROM trades
+LATEST ON ts PARTITION BY symbol;
+```
+
+Returns the most recent trade for each symbol.
+
+**Performance:** O(n) with deduplication index
+
+## Query Optimization Techniques
+
+### Partition Pruning
+
+Skip partitions outside the query time range.
+
+**Example:**
+```sql
+SELECT * FROM trades
+WHERE ts BETWEEN '2024-01-01' AND '2024-01-02';
+```
+
+With daily partitions:
+- Scan only `2024-01-01/` and `2024-01-02/` partitions
+- Skip all other partitions
+
+**Implementation:** `IntrinsicModel` extracts time range from WHERE clause
+
+**See:** `io/questdb/griffin/model/IntrinsicModel.java`
+
+### Index Selection
+
+Choose the best index for a filter.
+
+**Heuristic:**
+1. Equality on indexed symbol column → bitmap index
+2. IN list on indexed symbol → bitmap index with OR
+3. Range on timestamp → partition pruning + timestamp index
+4. Otherwise → full table scan with filter
+
+**Example:**
+```sql
+SELECT * FROM trades
+WHERE symbol = 'AAPL' AND price > 100;
+```
+
+Optimal plan:
+1. Use bitmap index on `symbol = 'AAPL'`
+2. Filter remaining rows with `price > 100`
+
+### Predicate Pushdown
+
+Move filters closer to data source to reduce data scanned.
+
+**Example:**
+```sql
+SELECT * FROM (
+  SELECT * FROM trades WHERE ts > '2024-01-01'
+) WHERE symbol = 'AAPL';
+```
+
+Optimized:
+```sql
+SELECT * FROM trades
+WHERE ts > '2024-01-01' AND symbol = 'AAPL';
+```
+
+Both filters applied at table scan (no intermediate results).
+
+### Constant Folding
+
+Evaluate constant expressions at compile time.
+
+**Example:**
+```sql
+SELECT * FROM trades WHERE price > 100 * 2;
+```
+
+Optimized:
+```sql
+SELECT * FROM trades WHERE price > 200;
+```
+
+Multiplication computed once at compile time, not per row.
+
+### Join Reordering
+
+Optimize join order to minimize intermediate results.
+
+**Heuristic:**
+1. Smaller table on the right (build side of hash join)
+2. Apply filters before joins
+3. Joins on indexed columns preferred
+
+**Example:**
+```sql
+SELECT * FROM large_table
+JOIN small_table ON (key)
+WHERE small_table.value > 100;
+```
+
+Optimized plan:
+1. Filter `small_table` first (`value > 100`)
+2. Build hash table on filtered `small_table`
+3. Probe with `large_table`
+
+## JIT Compilation
+
+**Location:** `core/src/main/java/io/questdb/jit/`
+
+QuestDB can JIT-compile WHERE clause filters to native code for maximum performance.
+
+**Supported:**
+- x86-64 only (not available on ARM64)
+- Simple filters (comparisons, boolean logic)
+- Numeric types
+
+**Example:**
+```sql
+SELECT * FROM trades
+WHERE price > 100 AND volume < 1000;
+```
+
+Compiled to x86-64 assembly:
+```asm
+mov rax, [price]    ; load price
+cmp rax, 100        ; compare with 100
+jle skip            ; skip if <=
+mov rbx, [volume]   ; load volume
+cmp rbx, 1000       ; compare with 1000
+jge skip            ; skip if >=
+; row matches
+```
+
+**Performance:** 2-3x faster than interpreted filter evaluation
+
+**See:** `io/questdb/jit/JitUtil.java`
+
+## Parallel Query Execution
+
+QuestDB can parallelize query execution across partitions.
+
+**Strategy:**
+- Each partition processed independently
+- Worker threads from shared pool
+- Results merged in order
+
+**Example:**
+```sql
+SELECT symbol, sum(volume)
+FROM trades
+WHERE ts BETWEEN '2024-01-01' AND '2024-12-31'
+GROUP BY symbol;
+```
+
+With daily partitions:
+1. Split 365 partitions across N threads
+2. Each thread aggregates its partitions
+3. Merge aggregated results
+
+**Configuration:**
+- `shared.worker.count` — Number of worker threads
+
+## Error Handling
+
+### SqlException
+
+**Location:** `io/questdb/griffin/SqlException.java`
+
+All SQL errors throw `SqlException` with:
+- Error message
+- Position in SQL text (character offset)
+- Error code (optional)
+
+**Error position convention:** Point to the specific offending character, not the start of the expression.
+
+**Example:**
+```java
+throw SqlException.$(position, "Invalid column name: ").put(columnName);
+```
+
+## Related Pages
+
+- [Storage Engine](/development/storage-engine) — Cairo storage internals
+- [SIMD Optimizations](/development/simd-optimization) — Vector operations
+- [Architecture Overview](/development/architecture) — System architecture
+- [Testing](/development/testing) — SQL testing conventions

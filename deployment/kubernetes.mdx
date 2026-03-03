@@ -1,0 +1,551 @@
+---
+title: Kubernetes Deployment
+description: Deploy QuestDB on Kubernetes using Helm charts and kubectl manifests
+---
+
+## Overview
+
+Deploy QuestDB on Kubernetes for production-grade orchestration, scaling, and high availability.
+
+## Prerequisites
+
+- Kubernetes cluster (1.19+)
+- kubectl configured
+- Helm 3.x (for Helm deployment)
+- Persistent volume provisioner
+
+## Quick Start with Helm
+
+### Add QuestDB Helm Repository
+
+```bash
+helm repo add questdb https://helm.questdb.io/
+helm repo update
+```
+
+### Install QuestDB
+
+```bash
+helm install questdb questdb/questdb
+```
+
+### Verify Installation
+
+```bash
+kubectl get pods -l app.kubernetes.io/name=questdb
+kubectl get svc questdb
+```
+
+## Helm Configuration
+
+### Basic Configuration
+
+Create a `values.yaml` file:
+
+```yaml
+replicaCount: 1
+
+image:
+  repository: questdb/questdb
+  tag: latest
+  pullPolicy: IfNotPresent
+
+service:
+  type: LoadBalancer
+  http:
+    port: 9000
+  postgresql:
+    port: 8812
+  ilp:
+    port: 9009
+
+persistence:
+  enabled: true
+  storageClass: ""
+  accessMode: ReadWriteOnce
+  size: 50Gi
+
+resources:
+  requests:
+    memory: "2Gi"
+    cpu: "1000m"
+  limits:
+    memory: "8Gi"
+    cpu: "4000m"
+```
+
+Install with custom values:
+
+```bash
+helm install questdb questdb/questdb -f values.yaml
+```
+
+### Production Configuration
+
+```yaml
+replicaCount: 1
+
+image:
+  repository: questdb/questdb
+  tag: "7.3.10"  # Pin to specific version
+  pullPolicy: IfNotPresent
+
+service:
+  type: LoadBalancer
+  annotations:
+    service.beta.kubernetes.io/aws-load-balancer-type: nlb
+  http:
+    port: 9000
+  postgresql:
+    port: 8812
+  ilp:
+    port: 9009
+
+persistence:
+  enabled: true
+  storageClass: "fast-ssd"
+  accessMode: ReadWriteOnce
+  size: 100Gi
+
+resources:
+  requests:
+    memory: "4Gi"
+    cpu: "2000m"
+  limits:
+    memory: "16Gi"
+    cpu: "8000m"
+
+env:
+  - name: JAVA_OPTS
+    value: "-Xms4G -Xmx12G -XX:+UseParallelGC"
+  - name: QDB_PACKAGE
+    value: "kubernetes"
+
+affinity:
+  nodeAffinity:
+    preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 100
+        preference:
+          matchExpressions:
+            - key: node.kubernetes.io/instance-type
+              operator: In
+              values:
+                - m5.2xlarge
+                - m5.4xlarge
+
+livenessProbe:
+  enabled: true
+  httpGet:
+    path: /
+    port: 9000
+  initialDelaySeconds: 60
+  periodSeconds: 30
+  timeoutSeconds: 10
+  failureThreshold: 3
+
+readinessProbe:
+  enabled: true
+  httpGet:
+    path: /
+    port: 9000
+  initialDelaySeconds: 30
+  periodSeconds: 10
+  timeoutSeconds: 5
+  failureThreshold: 3
+```
+
+## kubectl Deployment
+
+### Namespace
+
+```yaml
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: questdb
+```
+
+### Persistent Volume Claim
+
+```yaml
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: questdb-storage
+  namespace: questdb
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: fast-ssd
+  resources:
+    requests:
+      storage: 100Gi
+```
+
+### Deployment
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: questdb
+  namespace: questdb
+  labels:
+    app: questdb
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: questdb
+  template:
+    metadata:
+      labels:
+        app: questdb
+    spec:
+      containers:
+      - name: questdb
+        image: questdb/questdb:latest
+        ports:
+        - name: http
+          containerPort: 9000
+          protocol: TCP
+        - name: postgresql
+          containerPort: 8812
+          protocol: TCP
+        - name: ilp
+          containerPort: 9009
+          protocol: TCP
+        env:
+        - name: QDB_PACKAGE
+          value: "kubernetes"
+        - name: QUESTDB_DATA_DIR
+          value: "/var/lib/questdb"
+        - name: JVM_PREPEND
+          value: "-Xms4G -Xmx8G -XX:+UseParallelGC"
+        volumeMounts:
+        - name: questdb-storage
+          mountPath: /var/lib/questdb
+        resources:
+          requests:
+            memory: "4Gi"
+            cpu: "2000m"
+          limits:
+            memory: "16Gi"
+            cpu: "8000m"
+        livenessProbe:
+          httpGet:
+            path: /
+            port: 9000
+          initialDelaySeconds: 60
+          periodSeconds: 30
+          timeoutSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /
+            port: 9000
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+      volumes:
+      - name: questdb-storage
+        persistentVolumeClaim:
+          claimName: questdb-storage
+```
+
+### Service
+
+```yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: questdb
+  namespace: questdb
+  labels:
+    app: questdb
+spec:
+  type: LoadBalancer
+  ports:
+  - name: http
+    port: 9000
+    targetPort: 9000
+    protocol: TCP
+  - name: postgresql
+    port: 8812
+    targetPort: 8812
+    protocol: TCP
+  - name: ilp
+    port: 9009
+    targetPort: 9009
+    protocol: TCP
+  selector:
+    app: questdb
+```
+
+### Apply Manifests
+
+```bash
+kubectl apply -f namespace.yaml
+kubectl apply -f pvc.yaml
+kubectl apply -f deployment.yaml
+kubectl apply -f service.yaml
+```
+
+## ConfigMap for Configuration
+
+Create a ConfigMap for `server.conf`:
+
+```yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: questdb-config
+  namespace: questdb
+data:
+  server.conf: |
+    http.enabled=true
+    http.net.bind.to=0.0.0.0:9000
+    
+    pg.enabled=true
+    pg.net.bind.to=0.0.0.0:8812
+    pg.user=admin
+    pg.password=quest
+    
+    line.tcp.enabled=true
+    line.tcp.net.bind.to=0.0.0.0:9009
+    
+    query.timeout.sec=60
+    shared.worker.count=4
+```
+
+Mount in Deployment:
+
+```yaml
+volumeMounts:
+- name: questdb-storage
+  mountPath: /var/lib/questdb
+- name: questdb-config
+  mountPath: /var/lib/questdb/conf
+  
+volumes:
+- name: questdb-storage
+  persistentVolumeClaim:
+    claimName: questdb-storage
+- name: questdb-config
+  configMap:
+    name: questdb-config
+```
+
+## Secrets for Credentials
+
+```yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: questdb-credentials
+  namespace: questdb
+type: Opaque
+stringData:
+  pg-password: "your-secure-password"
+  admin-password: "your-admin-password"
+```
+
+Reference in Deployment:
+
+```yaml
+env:
+- name: PG_PASSWORD
+  valueFrom:
+    secretKeyRef:
+      name: questdb-credentials
+      key: pg-password
+```
+
+## Ingress Configuration
+
+### NGINX Ingress
+
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: questdb-ingress
+  namespace: questdb
+  annotations:
+    kubernetes.io/ingress.class: nginx
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+spec:
+  tls:
+  - hosts:
+    - questdb.example.com
+    secretName: questdb-tls
+  rules:
+  - host: questdb.example.com
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: questdb
+            port:
+              number: 9000
+```
+
+## Horizontal Pod Autoscaling
+
+```yaml
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: questdb-hpa
+  namespace: questdb
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: questdb
+  minReplicas: 1
+  maxReplicas: 5
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 80
+```
+
+## StatefulSet (Alternative)
+
+For more stable network identities:
+
+```yaml
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: questdb
+  namespace: questdb
+spec:
+  serviceName: questdb
+  replicas: 1
+  selector:
+    matchLabels:
+      app: questdb
+  template:
+    metadata:
+      labels:
+        app: questdb
+    spec:
+      containers:
+      - name: questdb
+        image: questdb/questdb:latest
+        ports:
+        - containerPort: 9000
+          name: http
+        - containerPort: 8812
+          name: postgresql
+        - containerPort: 9009
+          name: ilp
+        volumeMounts:
+        - name: data
+          mountPath: /var/lib/questdb
+  volumeClaimTemplates:
+  - metadata:
+      name: data
+    spec:
+      accessModes: ["ReadWriteOnce"]
+      storageClassName: fast-ssd
+      resources:
+        requests:
+          storage: 100Gi
+```
+
+## Monitoring
+
+### ServiceMonitor for Prometheus
+
+```yaml
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: questdb
+  namespace: questdb
+spec:
+  selector:
+    matchLabels:
+      app: questdb
+  endpoints:
+  - port: http
+    path: /metrics
+    interval: 30s
+```
+
+## Troubleshooting
+
+### Check Pod Status
+
+```bash
+kubectl get pods -n questdb
+kubectl describe pod <pod-name> -n questdb
+```
+
+### View Logs
+
+```bash
+kubectl logs -n questdb <pod-name>
+kubectl logs -n questdb <pod-name> -f  # Follow logs
+```
+
+### Exec into Pod
+
+```bash
+kubectl exec -it -n questdb <pod-name> -- /bin/bash
+```
+
+### Check Storage
+
+```bash
+kubectl get pvc -n questdb
+kubectl describe pvc questdb-storage -n questdb
+```
+
+## Upgrade
+
+### Helm Upgrade
+
+```bash
+helm repo update
+helm upgrade questdb questdb/questdb -f values.yaml
+```
+
+### kubectl Upgrade
+
+```bash
+kubectl set image deployment/questdb questdb=questdb/questdb:7.3.10 -n questdb
+kubectl rollout status deployment/questdb -n questdb
+```
+
+## Cleanup
+
+```bash
+# Helm
+helm uninstall questdb
+
+# kubectl
+kubectl delete -f deployment.yaml
+kubectl delete -f service.yaml
+kubectl delete -f pvc.yaml
+kubectl delete namespace questdb
+```
+
+## Next Steps
+
+- Configure [AWS EKS](/deployment/aws) deployment
+- Explore [GCP GKE](/deployment/gcp) options
+- Set up monitoring and alerting

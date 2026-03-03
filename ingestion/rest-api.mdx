@@ -1,0 +1,505 @@
+---
+title: REST API
+description: HTTP endpoints for CSV import and SQL execution
+---
+
+QuestDB provides HTTP REST endpoints for data import, SQL execution, and CSV export. The REST API is ideal for web integrations, script-based loading, and ad-hoc data operations.
+
+## Overview
+
+**Default Port:** 9000
+**Base URL:** `http://localhost:9000`
+
+### Available Endpoints
+
+| Endpoint | Method | Purpose |
+|----------|--------|----------|
+| `/imp` | POST | CSV file import |
+| `/exec` | GET | SQL query execution |
+| `/api/v1/sql/execute` | GET | Alternative SQL endpoint |
+| `/exp` | GET | CSV export from query |
+| `/write` | POST | InfluxDB Line Protocol (HTTP) |
+| `/api/v2/write` | POST | ILP v2 compatible endpoint |
+
+## Configuration
+
+### Server Configuration
+
+Configure HTTP server in `conf/server.conf`:
+
+```properties
+# Enable HTTP server
+http.enabled=true
+
+# Bind address and port
+http.net.bind.to=0.0.0.0:9000
+
+# Connection limits
+http.net.connection.limit=256
+http.net.connection.timeout=300000
+
+# Buffer sizes
+http.receive.buffer.size=1048576
+http.send.buffer.size=2097152
+
+# Authentication (optional)
+#http.user=admin
+#http.password=quest
+
+# Context paths (default values)
+http.context.import=/imp
+http.context.execute=/exec
+http.context.export=/exp
+```
+
+### Authentication
+
+Enable HTTP Basic Authentication:
+
+```properties
+http.user=admin
+http.password=quest
+```
+
+**With curl:**
+```bash
+curl -u admin:quest http://localhost:9000/exec?query=SELECT+1
+```
+
+## CSV Import Endpoint
+
+### `/imp` - Import CSV Data
+
+The `/imp` endpoint imports CSV data via multipart form upload.
+
+**Method:** POST  
+**Content-Type:** multipart/form-data
+
+### Basic Import
+
+```bash
+curl -F data=@data.csv 'http://localhost:9000/imp'
+```
+
+### Import with Table Name
+
+```bash
+curl -F data=@data.csv 'http://localhost:9000/imp?name=my_table'
+```
+
+### Import with Schema
+
+Provide explicit column types:
+
+```bash
+curl -F schema='[{"name":"timestamp","type":"TIMESTAMP"},{"name":"value","type":"DOUBLE"}]' \
+     -F data=@data.csv \
+     'http://localhost:9000/imp?name=sensors'
+```
+
+### Query Parameters
+
+| Parameter | Type | Description | Default |
+|-----------|------|-------------|---------|
+| `name` | string | Table name | Derived from filename |
+| `overwrite` | boolean | Overwrite existing table | false |
+| `forceHeader` | boolean | Force first line as header | false |
+| `skipLev` | boolean | Skip line-extra-values errors | false |
+| `atomicity` | string | skipRow or abort | abort |
+| `partitionBy` | string | NONE, HOUR, DAY, WEEK, MONTH, YEAR | DAY |
+| `timestamp` | string | Designated timestamp column | Auto-detect |
+| `fmt` | string | Response format: json or text | text |
+
+### Example: Complete Import
+
+**CSV File (sensors.csv):**
+```csv
+timestamp,sensor_id,temperature,humidity
+2024-01-15T10:00:00.000Z,s001,22.5,0.45
+2024-01-15T10:01:00.000Z,s002,23.1,0.48
+2024-01-15T10:02:00.000Z,s003,21.8,0.52
+```
+
+**Import Command:**
+```bash
+curl -F data=@sensors.csv \
+     'http://localhost:9000/imp?name=sensors&timestamp=timestamp&partitionBy=HOUR&fmt=json'
+```
+
+**Response (JSON):**
+```json
+{
+  "status": "OK",
+  "location": "sensors",
+  "rowsRejected": 0,
+  "rowsImported": 3,
+  "header": true,
+  "partitionBy": "HOUR",
+  "timestamp": "timestamp",
+  "columns": [
+    {"name": "timestamp", "type": "TIMESTAMP", "size": 8, "errors": 0},
+    {"name": "sensor_id", "type": "STRING", "size": 16, "errors": 0},
+    {"name": "temperature", "type": "DOUBLE", "size": 8, "errors": 0},
+    {"name": "humidity", "type": "DOUBLE", "size": 8, "errors": 0}
+  ]
+}
+```
+
+**Response (Text):**
+```
++-----------------------------------------------------------------------------------+
+| Location:                  sensors                                                |
+| Partition by               HOUR                                                   |
+| Timestamp                  timestamp                                              |
++-----------------------------------------------------------------------------------+
+| Rows handled               3                                                      |
+| Rows imported              3                                                      |
++-----------------------------------------------------------------------------------+
+| 0              timestamp                                    TIMESTAMP              |
+| 1              sensor_id                                    STRING                 |
+| 2              temperature                                  DOUBLE                 |
+| 3              humidity                                     DOUBLE                 |
++-----------------------------------------------------------------------------------+
+```
+
+### Schema Specification
+
+Explicitly define column types:
+
+```bash
+curl -F schema='[
+  {"name":"timestamp","type":"TIMESTAMP","pattern":"yyyy-MM-dd HH:mm:ss"},
+  {"name":"sensor_id","type":"SYMBOL"},
+  {"name":"temperature","type":"DOUBLE"},
+  {"name":"humidity","type":"DOUBLE"}
+]' -F data=@sensors.csv 'http://localhost:9000/imp?name=sensors'
+```
+
+**Available Types:**
+- BOOLEAN, BYTE, SHORT, INT, LONG
+- FLOAT, DOUBLE
+- STRING, SYMBOL
+- TIMESTAMP, DATE
+- UUID, LONG256
+- GEOHASH(bits)
+
+### Error Handling
+
+**Skip Row on Error:**
+```bash
+curl -F data=@data.csv 'http://localhost:9000/imp?atomicity=skipRow'
+```
+
+**Abort on Error (default):**
+```bash
+curl -F data=@data.csv 'http://localhost:9000/imp?atomicity=abort'
+```
+
+## SQL Execution Endpoint
+
+### `/exec` - Execute SQL
+
+Execute SQL queries and DML statements.
+
+**Method:** GET  
+**Query Parameter:** `query`
+
+### Basic Query
+
+```bash
+curl -G 'http://localhost:9000/exec' --data-urlencode 'query=SELECT * FROM sensors LIMIT 10'
+```
+
+### Query Parameters
+
+| Parameter | Type | Description | Default |
+|-----------|------|-------------|---------|
+| `query` | string | SQL query to execute | Required |
+| `count` | boolean | Include row count | false |
+| `limit` | string | Row limit (e.g., "0,1000") | none |
+| `nm` | boolean | Skip metadata in response | false |
+| `timings` | boolean | Include execution timings | false |
+
+### Response Format
+
+**Request:**
+```bash
+curl -G 'http://localhost:9000/exec' \
+  --data-urlencode 'query=SELECT * FROM sensors WHERE timestamp > now() - 1h LIMIT 3'
+```
+
+**Response:**
+```json
+{
+  "query": "SELECT * FROM sensors WHERE timestamp > now() - 1h LIMIT 3",
+  "columns": [
+    {"name": "timestamp", "type": "TIMESTAMP"},
+    {"name": "sensor_id", "type": "STRING"},
+    {"name": "temperature", "type": "DOUBLE"},
+    {"name": "humidity", "type": "DOUBLE"}
+  ],
+  "timestamp": 0,
+  "dataset": [
+    ["2024-01-15T10:00:00.000000Z", "s001", 22.5, 0.45],
+    ["2024-01-15T10:01:00.000000Z", "s002", 23.1, 0.48],
+    ["2024-01-15T10:02:00.000000Z", "s003", 21.8, 0.52]
+  ],
+  "count": 3
+}
+```
+
+### DDL Statements
+
+**Create Table:**
+```bash
+curl -G 'http://localhost:9000/exec' --data-urlencode \
+  'query=CREATE TABLE trades (symbol SYMBOL, price DOUBLE, amount DOUBLE, timestamp TIMESTAMP) timestamp(timestamp) PARTITION BY DAY'
+```
+
+**Insert Data:**
+```bash
+curl -G 'http://localhost:9000/exec' --data-urlencode \
+  "query=INSERT INTO trades VALUES ('ETH-USD', 2615.54, 0.00044, '2024-01-15T10:00:00.000Z')"
+```
+
+**Drop Table:**
+```bash
+curl -G 'http://localhost:9000/exec' --data-urlencode 'query=DROP TABLE trades'
+```
+
+### Error Response
+
+```json
+{
+  "query": "SELECT * FROM nonexistent",
+  "error": "table does not exist [table=nonexistent]",
+  "position": 14
+}
+```
+
+## CSV Export Endpoint
+
+### `/exp` - Export Query Results
+
+Export query results as CSV.
+
+**Method:** GET  
+**Query Parameter:** `query`
+
+### Basic Export
+
+```bash
+curl -G 'http://localhost:9000/exp' \
+  --data-urlencode 'query=SELECT * FROM sensors' \
+  -o sensors_export.csv
+```
+
+### Export with Limit
+
+```bash
+curl -G 'http://localhost:9000/exp' \
+  --data-urlencode 'query=SELECT * FROM sensors LIMIT 10000' \
+  -o sensors_sample.csv
+```
+
+**Output (sensors_export.csv):**
+```csv
+"timestamp","sensor_id","temperature","humidity"
+"2024-01-15T10:00:00.000000Z","s001",22.5,0.45
+"2024-01-15T10:01:00.000000Z","s002",23.1,0.48
+"2024-01-15T10:02:00.000000Z","s003",21.8,0.52
+```
+
+## Complete Examples
+
+### Python Script
+
+```python
+import requests
+import json
+
+# Base URL
+base_url = 'http://localhost:9000'
+
+# Execute SQL query
+def query(sql):
+    response = requests.get(f'{base_url}/exec', params={'query': sql})
+    return response.json()
+
+# Import CSV file
+def import_csv(filepath, table_name):
+    with open(filepath, 'rb') as f:
+        files = {'data': f}
+        params = {'name': table_name, 'fmt': 'json'}
+        response = requests.post(f'{base_url}/imp', files=files, params=params)
+        return response.json()
+
+# Export query to CSV
+def export_csv(sql, output_file):
+    response = requests.get(f'{base_url}/exp', params={'query': sql})
+    with open(output_file, 'wb') as f:
+        f.write(response.content)
+
+# Example usage
+if __name__ == '__main__':
+    # Import data
+    result = import_csv('sensors.csv', 'sensors')
+    print(f"Imported {result['rowsImported']} rows")
+    
+    # Query data
+    data = query('SELECT * FROM sensors LIMIT 10')
+    print(f"Query returned {len(data['dataset'])} rows")
+    
+    # Export data
+    export_csv('SELECT * FROM sensors', 'sensors_export.csv')
+    print('Data exported to sensors_export.csv')
+```
+
+### Shell Script
+
+```bash
+#!/bin/bash
+
+BASE_URL="http://localhost:9000"
+
+# Create table
+curl -G "$BASE_URL/exec" --data-urlencode \
+  'query=CREATE TABLE sensors (
+    sensor_id SYMBOL,
+    temperature DOUBLE,
+    humidity DOUBLE,
+    timestamp TIMESTAMP
+  ) timestamp(timestamp) PARTITION BY DAY'
+
+# Import CSV
+curl -F data=@sensors.csv "$BASE_URL/imp?name=sensors&fmt=json"
+
+# Query data
+curl -G "$BASE_URL/exec" --data-urlencode \
+  'query=SELECT * FROM sensors WHERE timestamp > now() - 1h'
+
+# Export to CSV
+curl -G "$BASE_URL/exp" --data-urlencode \
+  'query=SELECT * FROM sensors' -o sensors_export.csv
+
+echo "Done!"
+```
+
+### JavaScript (Node.js)
+
+```javascript
+const axios = require('axios');
+const FormData = require('form-data');
+const fs = require('fs');
+
+const baseURL = 'http://localhost:9000';
+
+// Execute SQL query
+async function query(sql) {
+  const response = await axios.get(`${baseURL}/exec`, {
+    params: { query: sql }
+  });
+  return response.data;
+}
+
+// Import CSV file
+async function importCSV(filepath, tableName) {
+  const form = new FormData();
+  form.append('data', fs.createReadStream(filepath));
+  
+  const response = await axios.post(`${baseURL}/imp`, form, {
+    params: { name: tableName, fmt: 'json' },
+    headers: form.getHeaders()
+  });
+  return response.data;
+}
+
+// Export query to CSV
+async function exportCSV(sql, outputFile) {
+  const response = await axios.get(`${baseURL}/exp`, {
+    params: { query: sql },
+    responseType: 'stream'
+  });
+  
+  const writer = fs.createWriteStream(outputFile);
+  response.data.pipe(writer);
+  
+  return new Promise((resolve, reject) => {
+    writer.on('finish', resolve);
+    writer.on('error', reject);
+  });
+}
+
+// Example usage
+async function main() {
+  try {
+    // Import data
+    const result = await importCSV('sensors.csv', 'sensors');
+    console.log(`Imported ${result.rowsImported} rows`);
+    
+    // Query data
+    const data = await query('SELECT * FROM sensors LIMIT 10');
+    console.log(`Query returned ${data.dataset.length} rows`);
+    
+    // Export data
+    await exportCSV('SELECT * FROM sensors', 'sensors_export.csv');
+    console.log('Data exported to sensors_export.csv');
+  } catch (error) {
+    console.error('Error:', error.message);
+  }
+}
+
+main();
+```
+
+## Performance Tips
+
+### CSV Import
+
+1. **Large files:** Split into smaller chunks for parallel import
+2. **Schema specification:** Provide explicit schema for faster parsing
+3. **Skip validation:** Use `skipLev=true` for malformed data
+4. **Batch imports:** Import multiple files in parallel
+
+### SQL Execution
+
+1. **Use connection pooling** for concurrent requests
+2. **Add indexes** on frequently queried columns
+3. **Partition wisely** based on query patterns
+4. **Use LIMIT** for large result sets
+5. **Enable query cache** in server.conf
+
+## Security
+
+### Enable HTTPS
+
+Configure TLS in `server.conf`:
+
+```properties
+http.security.enabled=true
+http.security.keystore.path=/path/to/keystore.jks
+http.security.keystore.password=password
+```
+
+### Read-Only Mode
+
+Restrict to read-only queries:
+
+```properties
+http.security.readonly=true
+http.security.max.response.rows=10000
+```
+
+### CORS Configuration
+
+```properties
+http.cors.enabled=true
+http.cors.allow.origin=https://example.com
+```
+
+## Related Topics
+
+- [CSV Import Guide](/ingestion/csv-import) - Detailed CSV import documentation
+- [InfluxDB Line Protocol](/ingestion/influxdb-line-protocol) - ILP over HTTP
+- [PostgreSQL Wire](/ingestion/postgres-wire) - SQL INSERT via PostgreSQL protocol
+- [SQL Reference](/sql) - Complete SQL syntax

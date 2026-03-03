@@ -1,0 +1,727 @@
+---
+title: Numeric Functions
+description: Mathematical functions and numeric operations in QuestDB
+---
+
+QuestDB provides comprehensive mathematical functions for numeric types (INT, LONG, FLOAT, DOUBLE, DECIMAL).
+
+## Basic Math
+
+### abs
+
+Returns absolute value.
+
+**Signature:** `abs(N)` where N is any numeric type
+
+**Returns:** Same type as input
+
+**Example:**
+
+```sql
+SELECT abs(-42);
+-- Result: 42
+
+SELECT abs(-3.14);
+-- Result: 3.14
+
+SELECT abs(pnl) as abs_pnl FROM trades;
+```
+
+### sign
+
+Returns sign of value (-1, 0, or 1).
+
+**Signature:** `sign(N)` where N is any numeric type
+
+**Returns:** Same type as input
+
+**Example:**
+
+```sql
+SELECT sign(-42);
+-- Result: -1
+
+SELECT sign(0);
+-- Result: 0
+
+SELECT sign(42);
+-- Result: 1
+```
+
+### sqrt
+
+Computes square root.
+
+**Signature:** `sqrt(D)`
+
+**Parameters:**
+- `D` - DOUBLE
+
+**Returns:** `DOUBLE`
+
+**Example:**
+
+```sql
+SELECT sqrt(16);
+-- Result: 4.0
+
+SELECT sqrt(2);
+-- Result: 1.4142135623730951
+```
+
+### pow
+
+Raises number to power.
+
+**Signature:** `pow(DD)` or `power(DD)`
+
+**Parameters:**
+- First `D` - Base
+- Second `D` - Exponent
+
+**Returns:** `DOUBLE`
+
+**Example:**
+
+```sql
+SELECT pow(2, 8);
+-- Result: 256.0
+
+SELECT pow(price, 2) FROM trades;
+```
+
+### exp
+
+Computes e raised to power.
+
+**Signature:** `exp(D)`
+
+**Parameters:**
+- `D` - DOUBLE exponent
+
+**Returns:** `DOUBLE`
+
+**Example:**
+
+```sql
+SELECT exp(1);
+-- Result: 2.718281828459045
+
+SELECT exp(2);
+-- Result: 7.389056098930650
+```
+
+### ln
+
+Computes natural logarithm (base e).
+
+**Signature:** `ln(D)`
+
+**Parameters:**
+- `D` - DOUBLE
+
+**Returns:** `DOUBLE`
+
+**Example:**
+
+```sql
+SELECT ln(2.718281828459045);
+-- Result: 1.0
+
+SELECT ln(price) FROM trades;
+```
+
+### log
+
+Computes logarithm (base 10).
+
+**Signature:** `log(D)` or `log10(D)`
+
+**Parameters:**
+- `D` - DOUBLE
+
+**Returns:** `DOUBLE`
+
+**Example:**
+
+```sql
+SELECT log(100);
+-- Result: 2.0
+
+SELECT log(1000);
+-- Result: 3.0
+```
+
+## Rounding Functions
+
+### round
+
+Rounds to specified decimal places.
+
+**Signature:** `round(DI)`
+
+**Parameters:**
+- `D` - DOUBLE value
+- `I` - Number of decimal places
+
+**Returns:** `DOUBLE`
+
+**Example:**
+
+```sql
+SELECT round(3.14159, 2);
+-- Result: 3.14
+
+SELECT round(3.14159, 0);
+-- Result: 3.0
+
+SELECT round(1234.5678, -2);
+-- Result: 1200.0
+
+SELECT round(price, 2) FROM trades;
+```
+
+### round_down
+
+Rounds down (toward negative infinity).
+
+**Signature:** `round_down(DI)`
+
+**Parameters:**
+- `D` - DOUBLE value
+- `I` - Number of decimal places
+
+**Returns:** `DOUBLE`
+
+**Example:**
+
+```sql
+SELECT round_down(3.14159, 2);
+-- Result: 3.14
+
+SELECT round_down(3.19, 1);
+-- Result: 3.1
+```
+
+### round_up
+
+Rounds up (toward positive infinity).
+
+**Signature:** `round_up(DI)`
+
+**Parameters:**
+- `D` - DOUBLE value
+- `I` - Number of decimal places
+
+**Returns:** `DOUBLE`
+
+**Example:**
+
+```sql
+SELECT round_up(3.14159, 2);
+-- Result: 3.15
+
+SELECT round_up(3.11, 1);
+-- Result: 3.2
+```
+
+### round_half_even
+
+Rounds using banker's rounding (round half to even).
+
+**Signature:** `round_half_even(DI)`
+
+**Parameters:**
+- `D` - DOUBLE value
+- `I` - Number of decimal places
+
+**Returns:** `DOUBLE`
+
+**Example:**
+
+```sql
+SELECT round_half_even(2.5, 0);
+-- Result: 2.0 (rounds to even)
+
+SELECT round_half_even(3.5, 0);
+-- Result: 4.0 (rounds to even)
+```
+
+### ceil
+
+Rounds up to nearest integer.
+
+**Signature:** `ceil(D)` or `ceiling(D)`
+
+**Parameters:**
+- `D` - DOUBLE
+
+**Returns:** `DOUBLE`
+
+**Example:**
+
+```sql
+SELECT ceil(3.14);
+-- Result: 4.0
+
+SELECT ceil(-3.14);
+-- Result: -3.0
+```
+
+### floor
+
+Rounds down to nearest integer.
+
+**Signature:** `floor(D)`
+
+**Parameters:**
+- `D` - DOUBLE
+
+**Returns:** `DOUBLE`
+
+**Example:**
+
+```sql
+SELECT floor(3.14);
+-- Result: 3.0
+
+SELECT floor(-3.14);
+-- Result: -4.0
+```
+
+## Trigonometric Functions
+
+### sin
+
+Computes sine (radians).
+
+**Signature:** `sin(D)`
+
+**Parameters:**
+- `D` - DOUBLE angle in radians
+
+**Returns:** `DOUBLE`
+
+**Example:**
+
+```sql
+SELECT sin(0);
+-- Result: 0.0
+
+SELECT sin(pi() / 2);
+-- Result: 1.0
+```
+
+### cos
+
+Computes cosine (radians).
+
+**Signature:** `cos(D)`
+
+**Parameters:**
+- `D` - DOUBLE angle in radians
+
+**Returns:** `DOUBLE`
+
+**Example:**
+
+```sql
+SELECT cos(0);
+-- Result: 1.0
+
+SELECT cos(pi());
+-- Result: -1.0
+```
+
+### tan
+
+Computes tangent (radians).
+
+**Signature:** `tan(D)`
+
+**Parameters:**
+- `D` - DOUBLE angle in radians
+
+**Returns:** `DOUBLE`
+
+**Example:**
+
+```sql
+SELECT tan(0);
+-- Result: 0.0
+```
+
+### asin
+
+Computes arcsine (radians).
+
+**Signature:** `asin(D)`
+
+**Parameters:**
+- `D` - DOUBLE value between -1 and 1
+
+**Returns:** `DOUBLE`
+
+**Example:**
+
+```sql
+SELECT asin(0.5);
+-- Result: 0.5235987755982989 (π/6)
+```
+
+### acos
+
+Computes arccosine (radians).
+
+**Signature:** `acos(D)`
+
+**Parameters:**
+- `D` - DOUBLE value between -1 and 1
+
+**Returns:** `DOUBLE`
+
+**Example:**
+
+```sql
+SELECT acos(0.5);
+-- Result: 1.0471975511965979 (π/3)
+```
+
+### atan
+
+Computes arctangent (radians).
+
+**Signature:** `atan(D)`
+
+**Parameters:**
+- `D` - DOUBLE
+
+**Returns:** `DOUBLE`
+
+**Example:**
+
+```sql
+SELECT atan(1);
+-- Result: 0.7853981633974483 (π/4)
+```
+
+### atan2
+
+Computes arctangent of y/x (radians).
+
+**Signature:** `atan2(DD)`
+
+**Parameters:**
+- First `D` - y coordinate
+- Second `D` - x coordinate
+
+**Returns:** `DOUBLE`
+
+**Example:**
+
+```sql
+SELECT atan2(1, 1);
+-- Result: 0.7853981633974483 (π/4)
+```
+
+### cot
+
+Computes cotangent (radians).
+
+**Signature:** `cot(D)`
+
+**Parameters:**
+- `D` - DOUBLE angle in radians
+
+**Returns:** `DOUBLE`
+
+**Example:**
+
+```sql
+SELECT cot(pi() / 4);
+-- Result: 1.0
+```
+
+## Angle Conversion
+
+### radians
+
+Converts degrees to radians.
+
+**Signature:** `radians(D)`
+
+**Parameters:**
+- `D` - DOUBLE degrees
+
+**Returns:** `DOUBLE`
+
+**Example:**
+
+```sql
+SELECT radians(180);
+-- Result: 3.141592653589793 (π)
+
+SELECT radians(90);
+-- Result: 1.5707963267948966 (π/2)
+```
+
+### degrees
+
+Converts radians to degrees.
+
+**Signature:** `degrees(D)`
+
+**Parameters:**
+- `D` - DOUBLE radians
+
+**Returns:** `DOUBLE`
+
+**Example:**
+
+```sql
+SELECT degrees(pi());
+-- Result: 180.0
+
+SELECT degrees(pi() / 2);
+-- Result: 90.0
+```
+
+## Constants
+
+### pi
+
+Returns π (pi).
+
+**Signature:** `pi()`
+
+**Returns:** `DOUBLE`
+
+**Example:**
+
+```sql
+SELECT pi();
+-- Result: 3.141592653589793
+
+SELECT 2 * pi() * radius as circumference FROM circles;
+```
+
+## Comparison Functions
+
+### greatest
+
+Returns largest value from arguments.
+
+**Signature:** `greatest(N, N, ...)`
+
+**Parameters:**
+- Variable number of numeric arguments
+
+**Returns:** Same type as inputs
+
+**Example:**
+
+```sql
+SELECT greatest(1, 5, 3, 2);
+-- Result: 5
+
+SELECT greatest(price1, price2, price3) FROM multi_venue_trades;
+```
+
+### least
+
+Returns smallest value from arguments.
+
+**Signature:** `least(N, N, ...)`
+
+**Parameters:**
+- Variable number of numeric arguments
+
+**Returns:** Same type as inputs
+
+**Example:**
+
+```sql
+SELECT least(1, 5, 3, 2);
+-- Result: 1
+
+SELECT least(bid1, bid2, bid3) FROM orderbook;
+```
+
+## Arithmetic Operators
+
+### Addition
+
+```sql
+SELECT 2 + 3;
+-- Result: 5
+
+SELECT price + adjustment FROM trades;
+```
+
+### Subtraction
+
+```sql
+SELECT 5 - 3;
+-- Result: 2
+
+SELECT sell_price - buy_price as profit FROM trades;
+```
+
+### Multiplication
+
+```sql
+SELECT 4 * 3;
+-- Result: 12
+
+SELECT price * quantity as notional FROM trades;
+```
+
+### Division
+
+```sql
+SELECT 10 / 3;
+-- Result: 3.3333333333333335
+
+SELECT profit / cost as profit_margin FROM trades;
+```
+
+### Modulo
+
+```sql
+SELECT 10 % 3;
+-- Result: 1
+
+SELECT id % 10 as partition_key FROM events;
+```
+
+### Negation
+
+```sql
+SELECT -42;
+-- Result: -42
+
+SELECT -balance FROM accounts;
+```
+
+## Bitwise Operations
+
+### Bitwise AND
+
+**Operator:** `&`
+
+**Example:**
+
+```sql
+SELECT 12 & 10;
+-- Result: 8 (binary: 1100 & 1010 = 1000)
+
+SELECT flags & 0x0F FROM status;
+```
+
+### Bitwise OR
+
+**Operator:** `|`
+
+**Example:**
+
+```sql
+SELECT 12 | 10;
+-- Result: 14 (binary: 1100 | 1010 = 1110)
+
+SELECT flags | 0x80 FROM status;
+```
+
+### Bitwise XOR
+
+**Operator:** `^`
+
+**Example:**
+
+```sql
+SELECT 12 ^ 10;
+-- Result: 6 (binary: 1100 ^ 1010 = 0110)
+```
+
+### Bitwise NOT
+
+**Operator:** `~`
+
+**Example:**
+
+```sql
+SELECT ~10;
+-- Result: -11 (bitwise complement)
+```
+
+## Modulo and Remainder
+
+### mod
+
+Computes modulo (remainder).
+
+**Signature:** `mod(NN)` where N is INT, LONG, FLOAT, or DOUBLE
+
+**Parameters:**
+- First `N` - Dividend
+- Second `N` - Divisor
+
+**Returns:** Same type as inputs
+
+**Example:**
+
+```sql
+SELECT mod(10, 3);
+-- Result: 1
+
+SELECT mod(10.5, 3.2);
+-- Result: 0.9000000000000004
+```
+
+### rem
+
+Computes remainder (same as mod for positive numbers).
+
+**Signature:** `rem(NN)`
+
+**Parameters:**
+- First `N` - Dividend
+- Second `N` - Divisor
+
+**Returns:** Same type as inputs
+
+## Type Casting
+
+QuestDB supports explicit casting with `::` syntax:
+
+```sql
+SELECT 
+    '123'::INT,
+    456::DOUBLE,
+    789.5::LONG  -- truncates to 789
+FROM trades;
+```
+
+## NULL Handling
+
+Most numeric functions return NULL if any input is NULL:
+
+```sql
+SELECT abs(NULL);
+-- Result: NULL
+
+SELECT 5 + NULL;
+-- Result: NULL
+```
+
+## Performance Notes
+
+- Integer operations are faster than floating-point
+- Use appropriate types: INT for small integers, LONG for large
+- DECIMAL types provide precise decimal arithmetic
+- Bitwise operations are highly optimized
+
+## See Also
+
+- [Numeric Data Types](/reference/datatypes/#numeric)
+- [Aggregation Functions](/api/functions/aggregation/)
+- [Operators](/reference/operators/)

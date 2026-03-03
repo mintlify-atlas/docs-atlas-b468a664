@@ -1,0 +1,476 @@
+---
+title: AWS Deployment
+description: Deploy QuestDB on AWS using AMI, ECS, and EKS
+---
+
+## Overview
+
+QuestDB can be deployed on AWS using multiple methods: EC2 instances with official AMIs, Amazon ECS for container orchestration, or Amazon EKS for Kubernetes-based deployments.
+
+## AWS AMI Deployment
+
+### Quick Launch
+
+QuestDB provides official Amazon Machine Images (AMIs) for quick deployment:
+
+1. Navigate to AWS EC2 Console
+2. Click "Launch Instance"
+3. Search for "QuestDB" in Community AMIs
+4. Select the latest QuestDB AMI (e.g., `questdb-7.3.10-al2023-x86_64-ebs`)
+5. Choose instance type (recommended: `m5.xlarge` or larger)
+6. Configure instance and launch
+
+### AMI Details
+
+Official QuestDB AMIs are based on Amazon Linux 2023:
+
+- **Base OS**: Amazon Linux 2023
+- **Architecture**: x86_64
+- **Volume Type**: gp3 EBS
+- **Pre-configured**: QuestDB runs as a systemd service
+- **Data Volume**: Additional 50GB EBS volume mounted at `/dev/xvdb`
+
+### Instance Types
+
+Recommended EC2 instance types:
+
+| Instance Type | vCPUs | Memory | Use Case |
+|--------------|-------|--------|----------|
+| t3.large | 2 | 8 GB | Development/Testing |
+| m5.xlarge | 4 | 16 GB | Small Production |
+| m5.2xlarge | 8 | 32 GB | Medium Production |
+| m5.4xlarge | 16 | 64 GB | Large Production |
+| r5.2xlarge | 8 | 64 GB | Memory-Intensive |
+| c5.4xlarge | 16 | 32 GB | CPU-Intensive |
+
+### Security Groups
+
+Configure security group to allow:
+
+```text
+Inbound Rules:
+- Port 9000 (TCP) - Web Console & REST API
+- Port 8812 (TCP) - PostgreSQL Wire Protocol
+- Port 9009 (TCP) - InfluxDB Line Protocol
+- Port 22 (TCP) - SSH (for management)
+
+Outbound Rules:
+- All traffic (default)
+```
+
+### EBS Volume Configuration
+
+For production workloads, configure optimized EBS volumes:
+
+```bash
+# gp3 volumes (recommended)
+Volume Type: gp3
+Size: 100-500 GB (based on data requirements)
+IOPS: 3000-16000
+Throughput: 250-1000 MB/s
+
+# io2 volumes (high performance)
+Volume Type: io2
+Size: 100-500 GB
+IOPS: 10000-64000
+```
+
+### Connect to EC2 Instance
+
+```bash
+ssh -i your-key.pem ec2-user@<instance-public-ip>
+```
+
+### Manage QuestDB Service
+
+QuestDB runs as a systemd service on the AMI:
+
+```bash
+# Check status
+sudo systemctl status questdb
+
+# Start service
+sudo systemctl start questdb
+
+# Stop service
+sudo systemctl stop questdb
+
+# Restart service
+sudo systemctl restart questdb
+
+# View logs
+sudo journalctl -u questdb -f
+```
+
+### Configuration
+
+Edit configuration file:
+
+```bash
+sudo nano /var/lib/questdb/conf/server.conf
+```
+
+Example production configuration:
+
+```properties
+# Worker threads (match vCPU count)
+shared.worker.count=8
+
+# HTTP settings
+http.enabled=true
+http.net.bind.to=0.0.0.0:9000
+
+# PostgreSQL Wire
+pg.enabled=true
+pg.net.bind.to=0.0.0.0:8812
+pg.user=admin
+pg.password=YOUR_SECURE_PASSWORD
+
+# InfluxDB Line Protocol
+line.tcp.enabled=true
+line.tcp.net.bind.to=0.0.0.0:9009
+
+# Query timeout
+query.timeout.sec=300
+
+# Commit mode
+cairo.commit.mode=async
+```
+
+Restart after changes:
+
+```bash
+sudo systemctl restart questdb
+```
+
+## Amazon ECS Deployment
+
+### Prerequisites
+
+- AWS CLI installed and configured
+- ECS cluster created
+- EFS or EBS for persistent storage
+
+### Task Definition
+
+Create `questdb-task-definition.json`:
+
+```json
+{
+  "family": "questdb",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "2048",
+  "memory": "8192",
+  "containerDefinitions": [
+    {
+      "name": "questdb",
+      "image": "questdb/questdb:latest",
+      "portMappings": [
+        {
+          "containerPort": 9000,
+          "protocol": "tcp"
+        },
+        {
+          "containerPort": 8812,
+          "protocol": "tcp"
+        },
+        {
+          "containerPort": 9009,
+          "protocol": "tcp"
+        }
+      ],
+      "environment": [
+        {
+          "name": "QDB_PACKAGE",
+          "value": "ecs"
+        },
+        {
+          "name": "JVM_PREPEND",
+          "value": "-Xms4G -Xmx6G -XX:+UseParallelGC"
+        }
+      ],
+      "mountPoints": [
+        {
+          "sourceVolume": "questdb-data",
+          "containerPath": "/var/lib/questdb"
+        }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/questdb",
+          "awslogs-region": "us-east-1",
+          "awslogs-stream-prefix": "questdb"
+        }
+      }
+    }
+  ],
+  "volumes": [
+    {
+      "name": "questdb-data",
+      "efsVolumeConfiguration": {
+        "fileSystemId": "fs-xxxxxxxxx",
+        "transitEncryption": "ENABLED",
+        "authorizationConfig": {
+          "accessPointId": "fsap-xxxxxxxxx"
+        }
+      }
+    }
+  ]
+}
+```
+
+### Register Task Definition
+
+```bash
+aws ecs register-task-definition --cli-input-json file://questdb-task-definition.json
+```
+
+### Create ECS Service
+
+```bash
+aws ecs create-service \
+  --cluster questdb-cluster \
+  --service-name questdb \
+  --task-definition questdb \
+  --desired-count 1 \
+  --launch-type FARGATE \
+  --network-configuration "awsvpcConfiguration={subnets=[subnet-xxxxx],securityGroups=[sg-xxxxx],assignPublicIp=ENABLED}" \
+  --load-balancers "targetGroupArn=arn:aws:elasticloadbalancing:us-east-1:xxxxx:targetgroup/questdb/xxxxx,containerName=questdb,containerPort=9000"
+```
+
+### Application Load Balancer
+
+Create ALB with target groups:
+
+```bash
+# HTTP Console (9000)
+Target Group: questdb-http
+Port: 9000
+Health Check: HTTP:9000/
+
+# PostgreSQL Wire (8812)
+Target Group: questdb-pg
+Port: 8812
+Health Check: TCP:8812
+
+# InfluxDB Line Protocol (9009)
+Target Group: questdb-ilp
+Port: 9009
+Health Check: TCP:9009
+```
+
+## Amazon EKS Deployment
+
+### Prerequisites
+
+- eksctl installed
+- kubectl configured
+- AWS CLI configured
+
+### Create EKS Cluster
+
+```bash
+eksctl create cluster \
+  --name questdb-cluster \
+  --region us-east-1 \
+  --nodegroup-name questdb-nodes \
+  --node-type m5.xlarge \
+  --nodes 3 \
+  --nodes-min 2 \
+  --nodes-max 5 \
+  --managed
+```
+
+### Configure kubectl
+
+```bash
+aws eks update-kubeconfig --region us-east-1 --name questdb-cluster
+```
+
+### Deploy QuestDB with Helm
+
+```bash
+helm repo add questdb https://helm.questdb.io/
+helm repo update
+
+helm install questdb questdb/questdb \
+  --set service.type=LoadBalancer \
+  --set persistence.size=100Gi \
+  --set persistence.storageClass=gp3 \
+  --set resources.requests.memory=4Gi \
+  --set resources.requests.cpu=2000m \
+  --set resources.limits.memory=16Gi \
+  --set resources.limits.cpu=8000m
+```
+
+### EBS CSI Driver
+
+Install EBS CSI driver for persistent volumes:
+
+```bash
+kubectl apply -k "github.com/kubernetes-sigs/aws-ebs-csi-driver/deploy/kubernetes/overlays/stable/?ref=release-1.25"
+```
+
+Create StorageClass:
+
+```yaml
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: gp3
+provisioner: ebs.csi.aws.com
+parameters:
+  type: gp3
+  iops: "3000"
+  throughput: "250"
+allowVolumeExpansion: true
+reclaimPolicy: Retain
+```
+
+## Monitoring and Observability
+
+### CloudWatch Integration
+
+Enable CloudWatch logs:
+
+```bash
+# Create log group
+aws logs create-log-group --log-group-name /aws/questdb/production
+
+# Configure retention
+aws logs put-retention-policy \
+  --log-group-name /aws/questdb/production \
+  --retention-in-days 30
+```
+
+### CloudWatch Metrics
+
+Monitor key metrics:
+
+- CPU Utilization
+- Memory Utilization
+- Disk I/O
+- Network Traffic
+- EBS Volume Metrics
+
+### X-Ray Tracing
+
+Enable AWS X-Ray for distributed tracing (ECS/EKS).
+
+## Backup and Disaster Recovery
+
+### EBS Snapshots
+
+```bash
+# Create snapshot
+aws ec2 create-snapshot \
+  --volume-id vol-xxxxxxxxx \
+  --description "QuestDB data snapshot"
+
+# Automate with AWS Backup
+aws backup create-backup-plan --backup-plan file://backup-plan.json
+```
+
+### S3 Backup (Enterprise)
+
+Configure S3 backup in `server.conf`:
+
+```properties
+backup.enabled=true
+backup.object.store=s3::bucket=questdb-backups;root=production;region=us-east-1;access_key_id=${AWS_ACCESS_KEY};secret_access_key=${AWS_SECRET_ACCESS_KEY};
+backup.schedule.cron=0 2 * * *
+```
+
+## Cost Optimization
+
+### Reserved Instances
+
+Purchase EC2 Reserved Instances for 1-3 year terms (up to 72% savings).
+
+### Spot Instances
+
+Use Spot Instances for non-production workloads:
+
+```bash
+aws ec2 request-spot-instances \
+  --spot-price "0.50" \
+  --instance-count 1 \
+  --type "one-time" \
+  --launch-specification file://spot-specification.json
+```
+
+### EBS Optimization
+
+- Use gp3 instead of gp2 (20% cost savings)
+- Right-size volumes based on actual usage
+- Enable EBS volume lifecycle policies
+
+## Security Best Practices
+
+### IAM Roles
+
+Use IAM roles instead of access keys:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "s3:PutObject",
+        "s3:GetObject",
+        "s3:ListBucket"
+      ],
+      "Resource": [
+        "arn:aws:s3:::questdb-backups/*"
+      ]
+    }
+  ]
+}
+```
+
+### Network Security
+
+- Use VPC with private subnets
+- Enable VPC Flow Logs
+- Configure Security Groups with least privilege
+- Use AWS WAF for HTTP traffic
+- Enable encryption in transit (TLS)
+- Enable encryption at rest (EBS/EFS)
+
+## Troubleshooting
+
+### EC2 Instance Issues
+
+```bash
+# Check system logs
+sudo journalctl -xe
+
+# Check QuestDB logs
+sudo journalctl -u questdb -f
+
+# Check disk space
+df -h
+
+# Check memory
+free -m
+```
+
+### ECS Task Issues
+
+```bash
+# Describe tasks
+aws ecs describe-tasks --cluster questdb-cluster --tasks <task-id>
+
+# View CloudWatch logs
+aws logs tail /ecs/questdb --follow
+```
+
+## Next Steps
+
+- Explore [GCP deployment](/deployment/gcp) options
+- Set up [Kubernetes](/deployment/kubernetes) on EKS
+- Configure [Docker](/deployment/docker) for development

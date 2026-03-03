@@ -1,0 +1,98 @@
+---
+title: Introduction to QuestDB
+description: High-performance time-series database with blazingly fast ingestion and low-latency SQL queries
+---
+
+# Welcome to QuestDB
+
+QuestDB is an open-source time-series database offering blazingly fast ingestion and dynamic, low-latency SQL queries. Built for performance, QuestDB delivers a multi-tier storage engine and achieves high performance via column-oriented storage, parallelized vector execution, SIMD instructions, and low-latency techniques.
+
+## Why QuestDB?
+
+QuestDB combines the familiarity of SQL with specialized time-series features, making it ideal for applications that demand both speed and flexibility.
+
+### Key Features
+
+<CardGroup cols={2}>
+  <Card title="High-Performance Ingestion" icon="bolt">
+    Low-latency, high-throughput ingestion from single events to millions per second
+  </Card>
+  
+  <Card title="Time-Series SQL Extensions" icon="clock">
+    Advanced SQL features like ASOF JOIN, WINDOW JOIN, HORIZON JOIN, SAMPLE BY, and LATEST ON
+  </Card>
+  
+  <Card title="SIMD-Accelerated Execution" icon="gauge-high">
+    Parallel execution with SIMD acceleration for maximum query performance
+  </Card>
+  
+  <Card title="Multi-Tier Storage" icon="database">
+    Intelligent storage: WAL → native columnar → Parquet (time-partitioned and time-ordered)
+  </Card>
+  
+  <Card title="Multiple Protocols" icon="network-wired">
+    PostgreSQL wire protocol (PGwire), REST API, and InfluxDB Line Protocol (ILP)
+  </Card>
+  
+  <Card title="Open Source" icon="code-branch">
+    Apache 2.0 license with open formats—no vendor lock-in
+  </Card>
+</CardGroup>
+
+### Ideal Use Cases
+
+QuestDB excels in demanding time-series workloads:
+
+- **Financial market data** - Tick data, trades, order books, OHLC, with specialized [finance functions](https://questdb.com/docs/reference/function/finance/) and [orderbook analytics](https://questdb.com/docs/guides/order-book/)
+- **Sensor and telemetry data** - High cardinality data streams from IoT devices
+- **Real-time dashboards** - Live monitoring and analytics with continuous streaming
+
+### Beyond Performance
+
+With QuestDB, you don't need to worry about:
+
+- Out-of-order data handling
+- Deduplication and exactly-once semantics
+- Continuous streaming ingest with concurrent queries
+- Low-latency streaming data
+- Volatile and "bursty" data patterns
+- Schema changes on the fly while streaming data
+
+## Architecture Highlights
+
+QuestDB is implemented in zero-GC Java and C++, with QuestDB Enterprise including additional components in Rust. The core engine uses:
+
+- **Column-oriented storage** for optimal compression and vectorized operations
+- **Native C/C++ libraries** for performance-critical operations via JNI
+- **Zero-allocation data structures** on hot paths to avoid garbage collection overhead
+- **Time-partitioned storage** for efficient data lifecycle management
+
+## Getting Started
+
+<CardGroup cols={2}>
+  <Card title="Quick Start" icon="rocket" href="/quickstart">
+    Get QuestDB running in under 5 minutes with Docker
+  </Card>
+  
+  <Card title="Installation Guide" icon="download" href="/installation">
+    Install QuestDB using Docker, Homebrew, binaries, or build from source
+  </Card>
+  
+  <Card title="Connect & Ingest" icon="plug" href="/connect">
+    Learn about ingestion clients and connection methods
+  </Card>
+  
+  <Card title="SQL Reference" icon="book" href="/sql-reference">
+    Explore QuestDB's SQL dialect and time-series extensions
+  </Card>
+</CardGroup>
+
+## Try QuestDB Now
+
+<Tip>
+  Try our [live public demo](https://demo.questdb.com/) with real datasets including crypto trades, FX order books, and 10 years of NYC taxi trips with 1.6 billion rows.
+</Tip>
+
+## Next Steps
+
+Ready to dive in? Head over to the [Quick Start guide](/quickstart) to get QuestDB running in minutes, or explore the [Installation guide](/installation) for detailed setup options.

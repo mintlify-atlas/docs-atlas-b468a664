@@ -1,0 +1,325 @@
+---
+title: Docker Deployment
+description: Deploy QuestDB using Docker with docker run and docker-compose configurations
+---
+
+## Overview
+
+QuestDB provides official Docker images for easy deployment. The Docker image is based on Fedora Minimal and includes all necessary runtime dependencies.
+
+## Quick Start
+
+Run QuestDB with Docker in a single command:
+
+```bash
+docker run -p 9000:9000 -p 9009:9009 -p 8812:8812 questdb/questdb
+```
+
+Access the web console at [http://localhost:9000](http://localhost:9000)
+
+## Port Mapping
+
+QuestDB exposes three ports:
+
+| Port | Protocol | Description |
+|------|----------|-------------|
+| 9000 | HTTP | Web Console and REST API |
+| 9009 | TCP | InfluxDB Line Protocol (ILP) |
+| 8812 | TCP | PostgreSQL Wire Protocol |
+
+## Volume Mounts
+
+Persist data by mounting a volume to `/var/lib/questdb`:
+
+```bash
+docker run -p 9000:9000 -p 9009:9009 -p 8812:8812 \
+  -v $(pwd)/questdb-data:/var/lib/questdb \
+  questdb/questdb
+```
+
+### Directory Structure
+
+The QuestDB data directory contains:
+
+- `/db` - Table data and metadata
+- `/conf` - Configuration files
+- `/public` - Static web console files
+- `/.checkpoint` - Checkpoint data
+- `/snapshot` - Snapshot files
+
+## Environment Variables
+
+### Core Configuration
+
+```bash
+# Data directory (default: /var/lib/questdb)
+QUESTDB_DATA_DIR=/var/lib/questdb
+
+# Run as root user (default: false)
+RUN_AS_ROOT=false
+
+# Change ownership of data directory (default: true)
+DO_CHOWN=true
+
+# User and group IDs
+QUESTDB_UID=10001
+QUESTDB_GID=10001
+```
+
+### JVM Configuration
+
+```bash
+# Prepend JVM arguments
+JVM_PREPEND="-Xms2G -Xmx4G"
+```
+
+### Profiling (async-profiler)
+
+```bash
+# Enable async profiler
+PROFILER_ENABLED=true
+
+# Profiling events (cpu, wall, alloc, lock)
+PROFILER_EVENT=cpu,wall
+
+# Sampling interval
+PROFILER_INTERVAL=5ms
+
+# Profile rotation interval
+PROFILER_LOOP=30m
+
+# Output directory
+PROFILER_OUTPUT_DIR=/var/lib/questdb/profiles
+```
+
+## Docker Compose
+
+Create a `docker-compose.yml` file:
+
+```yaml
+version: '3.8'
+
+services:
+  questdb:
+    image: questdb/questdb:latest
+    container_name: questdb
+    ports:
+      - "9000:9000"  # Web Console & REST API
+      - "9009:9009"  # InfluxDB Line Protocol
+      - "8812:8812"  # PostgreSQL Wire Protocol
+    volumes:
+      - ./questdb-data:/var/lib/questdb
+    environment:
+      - QDB_PACKAGE=docker
+      - QUESTDB_DATA_DIR=/var/lib/questdb
+    restart: unless-stopped
+```
+
+Start the service:
+
+```bash
+docker-compose up -d
+```
+
+## Custom Configuration
+
+Mount a custom `server.conf` file:
+
+```bash
+docker run -p 9000:9000 -p 9009:9009 -p 8812:8812 \
+  -v $(pwd)/questdb-data:/var/lib/questdb \
+  -v $(pwd)/server.conf:/var/lib/questdb/conf/server.conf \
+  questdb/questdb
+```
+
+Example `server.conf`:
+
+```properties
+# HTTP settings
+http.enabled=true
+http.net.bind.to=0.0.0.0:9000
+
+# PostgreSQL Wire Protocol
+pg.enabled=true
+pg.net.bind.to=0.0.0.0:8812
+pg.user=admin
+pg.password=quest
+
+# InfluxDB Line Protocol (TCP)
+line.tcp.enabled=true
+line.tcp.net.bind.to=0.0.0.0:9009
+
+# Query timeout
+query.timeout.sec=60
+
+# Worker threads
+shared.worker.count=2
+```
+
+## Advanced Configuration
+
+### Resource Limits
+
+```yaml
+services:
+  questdb:
+    image: questdb/questdb:latest
+    deploy:
+      resources:
+        limits:
+          cpus: '4'
+          memory: 8G
+        reservations:
+          cpus: '2'
+          memory: 4G
+```
+
+### Health Check
+
+```yaml
+services:
+  questdb:
+    image: questdb/questdb:latest
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+```
+
+### Network Configuration
+
+```yaml
+services:
+  questdb:
+    image: questdb/questdb:latest
+    networks:
+      - questdb-network
+
+networks:
+  questdb-network:
+    driver: bridge
+```
+
+## Production Deployment
+
+### With Profiling
+
+```yaml
+services:
+  questdb:
+    image: questdb/questdb:latest
+    ports:
+      - "9000:9000"
+      - "9009:9009"
+      - "8812:8812"
+    volumes:
+      - ./questdb-data:/var/lib/questdb
+      - ./profiles:/var/lib/questdb/profiles
+    environment:
+      - PROFILER_ENABLED=true
+      - PROFILER_EVENT=cpu,wall
+      - PROFILER_INTERVAL=5ms
+      - PROFILER_LOOP=30m
+      - JVM_PREPEND=-Xms4G -Xmx8G -XX:+UseParallelGC
+    restart: unless-stopped
+```
+
+### Multi-Container Setup
+
+```yaml
+version: '3.8'
+
+services:
+  questdb:
+    image: questdb/questdb:latest
+    container_name: questdb
+    ports:
+      - "9000:9000"
+      - "9009:9009"
+      - "8812:8812"
+    volumes:
+      - questdb-data:/var/lib/questdb
+    environment:
+      - JVM_PREPEND=-Xms4G -Xmx8G
+    networks:
+      - app-network
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_INSTALL_PLUGINS=questdb-questdb-datasource
+    networks:
+      - app-network
+    restart: unless-stopped
+
+volumes:
+  questdb-data:
+
+networks:
+  app-network:
+    driver: bridge
+```
+
+## Docker Image Variants
+
+QuestDB provides two Docker image variants:
+
+### Standard Image (questdb/questdb)
+
+Based on Fedora Minimal 44, suitable for general use:
+
+```bash
+docker pull questdb/questdb:latest
+```
+
+### Red Hat OpenShift Compatible
+
+Based on UBI 10 Minimal, compatible with OpenShift:
+
+```dockerfile
+FROM registry.access.redhat.com/ubi10/ubi-minimal
+# Built-in support for restricted security contexts
+```
+
+## Troubleshooting
+
+### Permission Issues
+
+If you encounter permission errors:
+
+```bash
+# Run with specific UID/GID
+docker run -p 9000:9000 -p 9009:9009 -p 8812:8812 \
+  -v $(pwd)/questdb-data:/var/lib/questdb \
+  -e QUESTDB_UID=$(id -u) \
+  -e QUESTDB_GID=$(id -g) \
+  questdb/questdb
+```
+
+### View Logs
+
+```bash
+# Docker run
+docker logs questdb
+
+# Docker Compose
+docker-compose logs -f questdb
+```
+
+### Connect to Container
+
+```bash
+docker exec -it questdb /bin/bash
+```
+
+## Next Steps
+
+- Configure [AWS deployment](/deployment/aws) for cloud hosting
+- Set up [Kubernetes](/deployment/kubernetes) for orchestration
+- Explore [GCP deployment](/deployment/gcp) options

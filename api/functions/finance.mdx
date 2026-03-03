@@ -1,0 +1,407 @@
+---
+title: Finance Functions
+description: Specialized functions for orderbook and market data analysis in QuestDB
+---
+
+QuestDB provides specialized finance functions for analyzing orderbook data, market microstructure, and trading metrics.
+
+## Price Functions
+
+### mid
+
+Calculates mid price from bid and ask.
+
+**Signature:** `mid(DD)`
+
+**Parameters:**
+- First `D` - Bid price
+- Second `D` - Ask price
+
+**Returns:** `DOUBLE`
+
+**Formula:** `(bid + ask) / 2`
+
+**Example:**
+
+```sql
+SELECT mid(bid_price, ask_price) as mid_price
+FROM orderbook;
+-- Result: 150.125
+
+SELECT 
+    timestamp,
+    symbol,
+    mid(bid, ask) as mid_price
+FROM level1_quotes
+SAMPLE BY 1s;
+```
+
+### weighted_mid
+
+Calculates weighted mid price using bid and ask sizes.
+
+**Signature:** `weighted_mid(DDDD)`
+
+**Parameters:**
+- First `D` - Bid price
+- Second `D` - Ask price
+- Third `D` - Bid size
+- Fourth `D` - Ask size
+
+**Returns:** `DOUBLE`
+
+**Formula:** `(bid * ask_size + ask * bid_size) / (bid_size + ask_size)`
+
+**Example:**
+
+```sql
+SELECT weighted_mid(
+    bid_price, 
+    ask_price, 
+    bid_size, 
+    ask_size
+) as weighted_mid_price
+FROM orderbook;
+
+SELECT 
+    symbol,
+    weighted_mid(bid, ask, bid_qty, ask_qty) as wmid
+FROM quotes
+WHERE timestamp > now() - INTERVAL '1' HOUR;
+```
+
+## Spread Functions
+
+### spread
+
+Calculates bid-ask spread.
+
+**Signature:** `spread(DD)`
+
+**Parameters:**
+- First `D` - Bid price
+- Second `D` - Ask price
+
+**Returns:** `DOUBLE`
+
+**Formula:** `ask - bid`
+
+**Example:**
+
+```sql
+SELECT spread(bid_price, ask_price) as spread
+FROM orderbook;
+-- Result: 0.25
+
+SELECT 
+    symbol,
+    avg(spread(bid, ask)) as avg_spread
+FROM quotes
+GROUP BY symbol;
+```
+
+### spread_bps
+
+Calculates bid-ask spread in basis points.
+
+**Signature:** `spread_bps(DD)`
+
+**Parameters:**
+- First `D` - Bid price
+- Second `D` - Ask price
+
+**Returns:** `DOUBLE`
+
+**Formula:** `10000 * (ask - bid) / mid(bid, ask)`
+
+**Example:**
+
+```sql
+SELECT spread_bps(bid_price, ask_price) as spread_bps
+FROM orderbook;
+-- Result: 16.66 (basis points)
+
+SELECT 
+    symbol,
+    avg(spread_bps(bid, ask)) as avg_spread_bps,
+    min(spread_bps(bid, ask)) as min_spread_bps,
+    max(spread_bps(bid, ask)) as max_spread_bps
+FROM quotes
+WHERE timestamp > '2024-03-15T00:00:00Z'
+GROUP BY symbol
+ORDER BY avg_spread_bps;
+```
+
+## Volume-Weighted Metrics
+
+### vwap
+
+Calculates Volume-Weighted Average Price.
+
+**Signature:** `vwap(DD)` - aggregation function
+
+**Parameters:**
+- First `D` - Price
+- Second `D` - Volume/quantity
+
+**Returns:** `DOUBLE`
+
+**Formula:** `sum(price * volume) / sum(volume)`
+
+**Example:**
+
+```sql
+SELECT vwap(price, quantity) as vwap
+FROM trades
+WHERE symbol = 'AAPL'
+  AND timestamp > '2024-03-15T00:00:00Z';
+-- Result: 150.234
+
+-- VWAP by hour
+SELECT 
+    timestamp,
+    symbol,
+    vwap(price, quantity) as hourly_vwap
+FROM trades
+SAMPLE BY 1h ALIGN TO CALENDAR;
+
+-- VWAP vs price deviation
+SELECT 
+    symbol,
+    price,
+    vwap(price, quantity) OVER (PARTITION BY symbol) as daily_vwap,
+    (price - vwap(price, quantity) OVER (PARTITION BY symbol)) / 
+    vwap(price, quantity) OVER (PARTITION BY symbol) * 100 as deviation_pct
+FROM trades;
+```
+
+### twap
+
+Calculates Time-Weighted Average Price.
+
+**Signature:** `twap(DN)` - aggregation function
+
+**Parameters:**
+- `D` - Price
+- `N` - Timestamp
+
+**Returns:** `DOUBLE`
+
+**Formula:** Time-weighted average accounting for duration at each price
+
+**Example:**
+
+```sql
+SELECT twap(price, timestamp) as twap
+FROM quotes
+WHERE symbol = 'AAPL'
+  AND timestamp > '2024-03-15T00:00:00Z';
+-- Result: 150.187
+
+-- TWAP by minute
+SELECT 
+    timestamp,
+    symbol,
+    twap(mid(bid, ask), timestamp) as minute_twap
+FROM quotes
+SAMPLE BY 1m;
+
+-- Compare VWAP vs TWAP
+SELECT 
+    symbol,
+    vwap(price, quantity) as vwap,
+    twap(price, timestamp) as twap,
+    vwap(price, quantity) - twap(price, timestamp) as vwap_twap_diff
+FROM trades
+GROUP BY symbol;
+```
+
+## Orderbook Level Functions
+
+### level_price
+
+Extracts price at specific orderbook level.
+
+**Signature:** `level_price(AI)` 
+
+**Parameters:**
+- `A` - Array of price levels (DOUBLE[])
+- `I` - Level index (0-based)
+
+**Returns:** `DOUBLE`
+
+**Example:**
+
+```sql
+-- Assuming orderbook has bid_prices and ask_prices as arrays
+SELECT 
+    symbol,
+    level_price(bid_prices, 0) as best_bid,
+    level_price(ask_prices, 0) as best_ask,
+    level_price(bid_prices, 1) as bid_level_2,
+    level_price(ask_prices, 1) as ask_level_2
+FROM orderbook_snapshot;
+```
+
+### level_size
+
+Extracts size at specific orderbook level.
+
+**Signature:** `level_size(AI)`
+
+**Parameters:**
+- `A` - Array of size levels (DOUBLE[])
+- `I` - Level index (0-based)
+
+**Returns:** `DOUBLE`
+
+**Example:**
+
+```sql
+SELECT 
+    symbol,
+    level_size(bid_sizes, 0) as best_bid_size,
+    level_size(ask_sizes, 0) as best_ask_size
+FROM orderbook_snapshot;
+```
+
+## Usage Examples
+
+### Market Quality Analysis
+
+```sql
+SELECT 
+    symbol,
+    count() as quote_count,
+    avg(spread(bid, ask)) as avg_spread,
+    avg(spread_bps(bid, ask)) as avg_spread_bps,
+    stddev(spread_bps(bid, ask)) as spread_volatility,
+    avg(mid(bid, ask)) as avg_mid_price
+FROM quotes
+WHERE timestamp BETWEEN '2024-03-15T09:30:00Z' AND '2024-03-15T16:00:00Z'
+GROUP BY symbol
+ORDER BY avg_spread_bps;
+```
+
+### Intraday VWAP Comparison
+
+```sql
+SELECT 
+    timestamp,
+    symbol,
+    price,
+    vwap(price, quantity) as current_vwap,
+    price - vwap(price, quantity) as price_vs_vwap,
+    (price - vwap(price, quantity)) / vwap(price, quantity) * 100 as deviation_pct
+FROM trades
+WHERE symbol = 'AAPL'
+  AND timestamp > '2024-03-15T09:30:00Z'
+SAMPLE BY 5m;
+```
+
+### Execution Quality Report
+
+```sql
+SELECT 
+    trader_id,
+    symbol,
+    count() as trade_count,
+    sum(quantity) as total_quantity,
+    vwap(price, quantity) as execution_vwap,
+    avg(price) as avg_price,
+    min(price) as best_price,
+    max(price) as worst_price
+FROM executions
+WHERE timestamp > '2024-03-15T00:00:00Z'
+GROUP BY trader_id, symbol;
+```
+
+### Spread Analysis by Time of Day
+
+```sql
+SELECT 
+    hour(timestamp) as hour,
+    symbol,
+    count() as quote_count,
+    avg(spread_bps(bid, ask)) as avg_spread_bps,
+    percentile(spread_bps(bid, ask), 50) as median_spread_bps,
+    percentile(spread_bps(bid, ask), 95) as p95_spread_bps
+FROM quotes
+WHERE timestamp > '2024-03-01T00:00:00Z'
+GROUP BY hour(timestamp), symbol
+ORDER BY symbol, hour;
+```
+
+### Orderbook Imbalance
+
+```sql
+SELECT 
+    timestamp,
+    symbol,
+    bid_size,
+    ask_size,
+    (bid_size - ask_size) / (bid_size + ask_size) as imbalance,
+    CASE 
+        WHEN (bid_size - ask_size) / (bid_size + ask_size) > 0.2 THEN 'BUY_PRESSURE'
+        WHEN (bid_size - ask_size) / (bid_size + ask_size) < -0.2 THEN 'SELL_PRESSURE'
+        ELSE 'BALANCED'
+    END as market_pressure
+FROM orderbook
+WHERE symbol = 'AAPL'
+  AND timestamp > now() - INTERVAL '1' HOUR;
+```
+
+### Multi-Level Orderbook Analysis
+
+```sql
+SELECT 
+    symbol,
+    level_price(bid_prices, 0) as bid_1,
+    level_price(bid_prices, 1) as bid_2,
+    level_price(bid_prices, 2) as bid_3,
+    level_size(bid_sizes, 0) as bid_size_1,
+    level_size(bid_sizes, 1) as bid_size_2,
+    level_size(bid_sizes, 2) as bid_size_3,
+    level_price(ask_prices, 0) as ask_1,
+    level_price(ask_prices, 1) as ask_2,
+    level_price(ask_prices, 2) as ask_3,
+    level_size(ask_sizes, 0) as ask_size_1,
+    level_size(ask_sizes, 1) as ask_size_2,
+    level_size(ask_sizes, 2) as ask_size_3
+FROM orderbook_snapshot
+WHERE timestamp = latest(timestamp) BY symbol;
+```
+
+## Performance Notes
+
+### VWAP and TWAP
+
+- Both functions are implemented as efficient aggregations
+- Use with SAMPLE BY for time-bucketed calculations
+- VWAP uses SIMD acceleration for large datasets
+
+### Orderbook Functions
+
+- Array-based level functions have O(1) access time
+- Suitable for real-time orderbook snapshots
+- Consider using SAMPLE BY for historical analysis
+
+### Best Practices
+
+1. Use SAMPLE BY for time-series aggregations
+2. Filter by timestamp ranges for better performance
+3. Index symbol columns for faster GROUP BY operations
+4. Use designated timestamp for proper time-ordered operations
+
+## NULL Handling
+
+- Functions return NULL if any price input is NULL
+- VWAP and TWAP skip NULL values in aggregation
+- Spread functions require both bid and ask to be non-NULL
+
+## See Also
+
+- [Aggregation Functions](/api/functions/aggregation/)
+- [SAMPLE BY](/reference/sql/sample-by/)
+- [Window Functions](/api/functions/window/)
+- [Time Series Guide](/guides/time-series/)

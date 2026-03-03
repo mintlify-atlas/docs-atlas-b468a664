@@ -1,0 +1,372 @@
+---
+title: JOIN Operations
+description: JOIN types with focus on time-series joins including ASOF JOIN, WINDOW JOIN, and HORIZON JOIN.
+---
+
+QuestDB supports standard SQL joins plus specialized time-series joins optimized for temporal data analysis.
+
+## Standard JOIN Types
+
+### INNER JOIN
+
+Return rows with matching values in both tables:
+
+```sql
+SELECT t.symbol, t.quantity, p.price
+FROM trades t
+INNER JOIN prices p ON t.symbol = p.symbol;
+```
+
+### LEFT JOIN
+
+Return all rows from left table, with matching rows from right:
+
+```sql
+SELECT t.symbol, t.quantity, p.price
+FROM trades t
+LEFT JOIN prices p ON t.symbol = p.symbol;
+```
+
+### CROSS JOIN
+
+Cartesian product of both tables:
+
+```sql
+SELECT t.symbol, p.exchange
+FROM trades t
+CROSS JOIN exchanges p;
+```
+
+## ASOF JOIN
+
+ASOF JOIN matches rows based on temporal proximity. It joins each row from the left table with the most recent row from the right table where the timestamp is less than or equal to the left row's timestamp.
+
+### Basic ASOF JOIN
+
+```sql
+SELECT t.symbol, t.quantity, p.price, t.timestamp
+FROM trades t
+ASOF JOIN prices p ON (t.symbol = p.symbol);
+```
+
+This query joins each trade with the most recent price for that symbol.
+
+**Example Data:**
+
+Trades table:
+```
+symbol  quantity  timestamp
+AAPL    100       2023-12-28T10:30:00.000000Z
+AAPL    50        2023-12-28T11:00:00.000000Z
+```
+
+Prices table:
+```
+symbol  price   timestamp
+AAPL    150.00  2023-12-28T10:00:00.000000Z
+AAPL    151.00  2023-12-28T10:45:00.000000Z
+```
+
+**Query Result:**
+```
+symbol  quantity  price   timestamp
+AAPL    100       150.00  2023-12-28T10:30:00.000000Z
+AAPL    50        151.00  2023-12-28T11:00:00.000000Z
+```
+
+### ASOF JOIN with Multiple Columns
+
+```sql
+SELECT 
+    t.symbol,
+    t.quantity,
+    p.price,
+    t.timestamp AS trade_ts,
+    p.timestamp AS price_ts
+FROM trades t
+ASOF JOIN prices p ON (t.symbol = p.symbol);
+```
+
+### ASOF JOIN Use Cases
+
+- Join trades with market prices at time of trade
+- Correlate sensor readings with reference measurements
+- Match events with most recent state changes
+
+## LT JOIN (Less Than)
+
+LT JOIN is an alias for ASOF JOIN:
+
+```sql
+SELECT t.symbol, t.quantity, p.price
+FROM trades t
+LT JOIN prices p ON (t.symbol = p.symbol);
+```
+
+## WINDOW JOIN
+
+WINDOW JOIN aggregates data from the right table within a time window around each left table row. This enables time-window analytics like moving averages.
+
+### Basic WINDOW JOIN
+
+```sql
+SELECT 
+    t.symbol,
+    t.price AS trade_price,
+    t.timestamp,
+    avg(p.price) AS window_avg_price,
+    sum(p.quantity) AS window_volume
+FROM trades t
+WINDOW JOIN prices p ON (t.symbol = p.symbol)
+RANGE BETWEEN 5 MINUTE PRECEDING AND 5 MINUTE FOLLOWING;
+```
+
+This query calculates the average price and total volume within a 10-minute window (5 minutes before and after) each trade.
+
+**Example Data:**
+
+Trades table:
+```
+symbol  price   timestamp
+AAPL    151.00  2023-12-28T10:30:00.000000Z
+```
+
+Prices table:
+```
+symbol  price   quantity  timestamp
+AAPL    150.00  100       2023-12-28T10:26:00.000000Z
+AAPL    150.50  150       2023-12-28T10:28:00.000000Z
+AAPL    151.00  200       2023-12-28T10:30:00.000000Z
+AAPL    151.50  120       2023-12-28T10:32:00.000000Z
+AAPL    152.00  80        2023-12-28T10:34:00.000000Z
+```
+
+**Query Result:**
+```
+symbol  trade_price  timestamp                      window_avg_price  window_volume
+AAPL    151.00       2023-12-28T10:30:00.000000Z    150.80            650
+```
+
+### Include Prevailing
+
+By default, WINDOW JOIN excludes rows before the window start. Use `INCLUDE PREVAILING` to include the most recent row before the window:
+
+```sql
+SELECT 
+    t.symbol,
+    t.price,
+    t.timestamp,
+    avg(p.price) AS avg_price
+FROM trades t
+WINDOW JOIN prices p ON (t.symbol = p.symbol)
+RANGE BETWEEN 1 MINUTE PRECEDING AND 1 MINUTE FOLLOWING
+INCLUDE PREVAILING;
+```
+
+### WINDOW JOIN Without Key
+
+Omit the ON clause to aggregate all rows in the time window:
+
+```sql
+SELECT 
+    t.symbol,
+    t.price,
+    t.timestamp,
+    avg(p.price) AS market_avg
+FROM trades t
+WINDOW JOIN prices p
+RANGE BETWEEN 1 MINUTE PRECEDING AND 1 MINUTE FOLLOWING;
+```
+
+### WINDOW JOIN Use Cases
+
+- Calculate moving averages
+- Compute rolling volatility
+- Aggregate metrics within time windows
+- Time-windowed anomaly detection
+
+## HORIZON JOIN
+
+HORIZON JOIN aggregates data across multiple time offsets. It evaluates aggregations at regular intervals relative to each left table row.
+
+### Basic HORIZON JOIN
+
+```sql
+SELECT 
+    t.symbol,
+    h.offset,
+    avg(p.price) AS avg_price,
+    sum(p.quantity) AS total_quantity
+FROM trades t
+HORIZON JOIN prices p ON (t.symbol = p.symbol)
+RANGE FROM -10s TO 10s STEP 1s AS h;
+```
+
+This query computes average price and total quantity at 1-second intervals from 10 seconds before to 10 seconds after each trade.
+
+**Example Data:**
+
+Trades table:
+```
+symbol  timestamp
+AAPL    2023-12-28T10:30:00.000000Z
+```
+
+Prices table:
+```
+symbol  price   quantity  timestamp
+AAPL    150.00  100       2023-12-28T10:29:55.000000Z
+AAPL    150.50  150       2023-12-28T10:29:58.000000Z
+AAPL    151.00  200       2023-12-28T10:30:00.000000Z
+AAPL    151.50  120       2023-12-28T10:30:02.000000Z
+AAPL    152.00  80        2023-12-28T10:30:05.000000Z
+```
+
+**Query Result:**
+```
+symbol  offset       avg_price  total_quantity
+AAPL    -10000000    null       null
+AAPL    -9000000     null       null
+AAPL    -5000000     150.00     100
+AAPL    -2000000     150.25     250
+AAPL    0            150.50     450
+AAPL    2000000      150.75     570
+AAPL    5000000      151.00     650
+AAPL    10000000     151.00     650
+```
+
+Offset is in microseconds (for TIMESTAMP columns) or nanoseconds (for TIMESTAMP_NS columns).
+
+### HORIZON JOIN with LIST
+
+Specify specific offsets instead of a range:
+
+```sql
+SELECT 
+    t.symbol,
+    h.offset,
+    avg(p.price) AS avg_price
+FROM trades t
+HORIZON JOIN prices p ON (t.symbol = p.symbol)
+LIST (-5s, -1s, 0s, 1s, 5s) AS h;
+```
+
+**Query Result:**
+```
+symbol  offset       avg_price
+AAPL    -5000000     150.00
+AAPL    -1000000     150.25
+AAPL    0            150.50
+AAPL    1000000      150.625
+AAPL    5000000      151.00
+```
+
+### HORIZON JOIN Use Cases
+
+- Multi-horizon forecasting analysis
+- Event impact analysis at multiple time offsets
+- Cross-correlation studies
+- Lead/lag analysis
+
+## JOIN Performance Tips
+
+### Use Indexed SYMBOL Columns
+
+```sql
+CREATE TABLE trades (
+    symbol SYMBOL INDEX,
+    price DOUBLE,
+    quantity LONG,
+    timestamp TIMESTAMP
+) TIMESTAMP(timestamp) PARTITION BY DAY;
+```
+
+Indexed SYMBOL columns accelerate JOIN operations.
+
+### Filter Before Joining
+
+```sql
+SELECT t.symbol, t.quantity, p.price
+FROM (
+    SELECT * FROM trades
+    WHERE timestamp > dateadd('d', -1, now())
+) t
+ASOF JOIN prices p ON (t.symbol = p.symbol);
+```
+
+### Designated Timestamps
+
+Both tables should have designated timestamp columns for optimal time-series join performance:
+
+```sql
+CREATE TABLE trades (
+    symbol SYMBOL,
+    quantity LONG,
+    timestamp TIMESTAMP
+) TIMESTAMP(timestamp);
+
+CREATE TABLE prices (
+    symbol SYMBOL,
+    price DOUBLE,
+    timestamp TIMESTAMP
+) TIMESTAMP(timestamp);
+```
+
+## JOIN Limitations
+
+- **HORIZON JOIN cannot combine with other JOINs**: HORIZON JOIN must be the only join in the query
+- **Right table must have timestamp**: Time-series joins require the right table to have a designated timestamp column
+- **No FULL OUTER JOIN**: QuestDB does not support FULL OUTER JOIN
+- **No RIGHT JOIN**: Use LEFT JOIN with reversed table order instead
+
+## Examples
+
+### Calculate Trade Value with Latest Price
+
+```sql
+SELECT 
+    t.symbol,
+    t.quantity,
+    p.price,
+    t.quantity * p.price AS trade_value,
+    t.timestamp
+FROM trades t
+ASOF JOIN prices p ON (t.symbol = p.symbol)
+WHERE t.timestamp > dateadd('h', -1, now())
+ORDER BY t.timestamp DESC;
+```
+
+### Rolling 5-Minute Average
+
+```sql
+SELECT 
+    t.symbol,
+    t.price,
+    t.timestamp,
+    avg(p.price) AS rolling_avg_5min
+FROM trades t
+WINDOW JOIN prices p ON (t.symbol = p.symbol)
+RANGE BETWEEN 5 MINUTE PRECEDING AND CURRENT ROW
+ORDER BY t.timestamp;
+```
+
+### Multi-Offset Price Analysis
+
+```sql
+SELECT 
+    t.symbol,
+    h.offset / 1000000 AS offset_seconds,
+    avg(p.price) AS avg_price,
+    count() AS price_count
+FROM trades t
+HORIZON JOIN prices p ON (t.symbol = p.symbol)
+RANGE FROM -60s TO 60s STEP 10s AS h
+WHERE t.symbol = 'AAPL'
+ORDER BY t.timestamp, offset_seconds;
+```
+
+## Next Steps
+
+- [Time-Series Functions](/sql/time-series-functions) - Learn SAMPLE BY and LATEST ON
+- [Aggregations](/sql/aggregations) - Master aggregate functions
+- [Window Functions](/sql/window-functions) - Use analytical window functions

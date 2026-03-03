@@ -1,0 +1,393 @@
+---
+title: Import Endpoint
+description: Import CSV data using the /imp REST API endpoint
+---
+
+The `/imp` endpoint imports CSV data into QuestDB tables via HTTP multipart/form-data POST requests.
+
+## Endpoint
+
+```
+POST /imp
+```
+
+## Request Format
+
+The request must be a `multipart/form-data` POST with the CSV file in the `data` field.
+
+## Query Parameters
+
+<ParamField query="name" type="string">
+  Target table name. If not specified, uses the filename (without extension).
+</ParamField>
+
+<ParamField query="timestamp" type="string">
+  Column name to use as designated timestamp. QuestDB will use this column for time-based partitioning and queries.
+</ParamField>
+
+<ParamField query="partitionBy" type="string">
+  Partition strategy for the table. Options:
+  - `NONE` - No partitioning
+  - `HOUR` - Hourly partitions
+  - `DAY` - Daily partitions (recommended for most use cases)
+  - `WEEK` - Weekly partitions
+  - `MONTH` - Monthly partitions
+  - `YEAR` - Yearly partitions
+  
+  Default: `DAY` if timestamp column is specified, otherwise `NONE`.
+</ParamField>
+
+<ParamField query="overwrite" type="boolean" default="false">
+  When `true`, drops the existing table before importing. Use with caution.
+</ParamField>
+
+<ParamField query="create" type="boolean" default="true">
+  When `true`, creates the table if it doesn't exist. When `false`, imports only if table exists.
+</ParamField>
+
+<ParamField query="delimiter" type="string" default=",">
+  CSV field delimiter character. Common values:
+  - `,` - Comma (default)
+  - `\t` - Tab
+  - `;` - Semicolon
+  - `|` - Pipe
+</ParamField>
+
+<ParamField query="forceHeader" type="boolean" default="false">
+  When `true`, treats the first row as column names even if auto-detection suggests otherwise.
+</ParamField>
+
+<ParamField query="skipLev" type="boolean" default="false">
+  Skip Lines with Extra Values. When `true`, silently ignores rows with more columns than expected.
+</ParamField>
+
+<ParamField query="atomicity" type="string" default="skipRow">
+  Error handling strategy:
+  - `skipRow` - Skip rows with errors, import valid rows
+  - `abort` - Abort import on first error
+</ParamField>
+
+<ParamField query="maxUncommittedRows" type="integer">
+  Maximum number of uncommitted rows before automatic commit. Higher values improve import speed but use more memory.
+  
+  Default: Configured server value (typically 1000)
+</ParamField>
+
+<ParamField query="o3MaxLag" type="string">
+  Maximum out-of-order lag for timestamp values. Accepts time units:
+  - `1s` - 1 second
+  - `5m` - 5 minutes
+  - `1h` - 1 hour
+  - `1d` - 1 day
+  
+  Example: `o3MaxLag=10s`
+</ParamField>
+
+<ParamField query="fmt" type="string" default="tabular">
+  Response format:
+  - `tabular` - Plain text table
+  - `json` - JSON response
+</ParamField>
+
+## Response
+
+### JSON Format (`fmt=json`)
+
+<ResponseField name="status" type="string">
+  Status of the import: `"OK"` on success.
+</ResponseField>
+
+<ResponseField name="location" type="string">
+  Name of the table where data was imported.
+</ResponseField>
+
+<ResponseField name="rowsRejected" type="integer">
+  Number of rows that failed to import due to errors.
+</ResponseField>
+
+<ResponseField name="rowsImported" type="integer">
+  Number of rows successfully imported.
+</ResponseField>
+
+<ResponseField name="header" type="boolean">
+  Whether a header row was detected in the CSV.
+</ResponseField>
+
+<ResponseField name="partitionBy" type="string">
+  Partition strategy used for the table.
+</ResponseField>
+
+<ResponseField name="timestamp" type="string">
+  Name of the designated timestamp column (if specified).
+</ResponseField>
+
+<ResponseField name="warnings" type="array">
+  Array of warning messages (if any).
+  
+  Common warnings:
+  - `"Existing table timestamp column is used"` - Import used existing table's timestamp
+  - `"Existing table PartitionBy is used"` - Import used existing table's partition strategy
+</ResponseField>
+
+<ResponseField name="columns" type="array">
+  Array of column information.
+  
+  <Expandable title="Column Object">
+    <ResponseField name="name" type="string">
+      Column name.
+    </ResponseField>
+    
+    <ResponseField name="type" type="string">
+      Detected or assigned data type.
+    </ResponseField>
+    
+    <ResponseField name="size" type="integer">
+      Size of the column type in bytes.
+    </ResponseField>
+    
+    <ResponseField name="errors" type="integer">
+      Number of errors encountered for this column during import.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+## Examples
+
+### Basic CSV Import
+
+Import a CSV file into a new table:
+
+```bash
+curl -F data=@sensors.csv "http://localhost:9000/imp"
+```
+
+The table name will be `sensors` (derived from filename).
+
+### Import with Table Name
+
+```bash
+curl -F data=@data.csv "http://localhost:9000/imp?name=my_sensors"
+```
+
+### Import with Timestamp and Partitioning
+
+```bash
+curl -F data=@sensors.csv \
+  "http://localhost:9000/imp?name=sensors&timestamp=ts&partitionBy=DAY"
+```
+
+<ResponseExample>
+```json Response
+{
+  "status": "OK",
+  "location": "sensors",
+  "rowsRejected": 0,
+  "rowsImported": 1000,
+  "header": true,
+  "partitionBy": "DAY",
+  "timestamp": "ts",
+  "columns": [
+    {"name": "ts", "type": "TIMESTAMP", "size": 8, "errors": 0},
+    {"name": "sensor_id", "type": "SYMBOL", "size": 4, "errors": 0},
+    {"name": "temperature", "type": "DOUBLE", "size": 8, "errors": 0},
+    {"name": "humidity", "type": "DOUBLE", "size": 8, "errors": 0}
+  ]
+}
+```
+</ResponseExample>
+
+### Import with Custom Delimiter
+
+Import a tab-separated file:
+
+```bash
+curl -F data=@data.tsv \
+  "http://localhost:9000/imp?name=my_table&delimiter=%09"
+```
+
+Note: `%09` is the URL-encoded tab character.
+
+### Import with JSON Response
+
+```bash
+curl -F data=@sensors.csv \
+  "http://localhost:9000/imp?fmt=json"
+```
+
+### Overwrite Existing Table
+
+<Warning>
+  This will delete all existing data in the table!
+</Warning>
+
+```bash
+curl -F data=@sensors.csv \
+  "http://localhost:9000/imp?name=sensors&overwrite=true"
+```
+
+### Import into Existing Table
+
+Append data to an existing table (fails if table doesn't exist):
+
+```bash
+curl -F data=@new_sensors.csv \
+  "http://localhost:9000/imp?name=sensors&create=false"
+```
+
+### Import with Schema Definition
+
+You can provide a schema JSON to specify column types:
+
+```bash
+curl -F schema='[
+  {"name": "timestamp", "type": "TIMESTAMP", "pattern": "yyyy-MM-dd HH:mm:ss"},
+  {"name": "sensor_id", "type": "SYMBOL"},
+  {"name": "temperature", "type": "DOUBLE"},
+  {"name": "status", "type": "INT"}
+]' -F data=@sensors.csv \
+  "http://localhost:9000/imp?name=sensors&timestamp=timestamp"
+```
+
+### Advanced Import with Multiple Options
+
+```bash
+curl -F data=@sensors.csv \
+  "http://localhost:9000/imp?name=sensors&timestamp=ts&partitionBy=HOUR&maxUncommittedRows=10000&o3MaxLag=10s&fmt=json"
+```
+
+## CSV Format Requirements
+
+### Header Row
+
+The first row is automatically detected as a header if:
+- Column names are valid identifiers
+- Values differ significantly from subsequent rows
+
+Use `forceHeader=true` to always treat the first row as headers.
+
+### Data Types
+
+QuestDB automatically detects column types:
+
+| Pattern | Detected Type | Example |
+|---------|---------------|----------|
+| `true`, `false` | BOOLEAN | `true` |
+| Integer | INT or LONG | `123` |
+| Decimal | DOUBLE | `3.14` |
+| ISO timestamp | TIMESTAMP | `2024-01-01T00:00:00.000Z` |
+| UUID format | UUID | `a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11` |
+| IPv4 format | IPv4 | `192.168.1.1` |
+| Text | STRING or SYMBOL | `hello` |
+
+### Timestamp Formats
+
+Supported timestamp formats:
+- `yyyy-MM-ddTHH:mm:ss.SSSSSSSZ` (ISO 8601)
+- `yyyy-MM-dd HH:mm:ss`
+- `yyyy-MM-dd`
+- Unix timestamp (seconds or milliseconds)
+
+Specify custom formats in the schema JSON with the `pattern` field.
+
+### Null Values
+
+The following are treated as NULL:
+- Empty fields (consecutive delimiters)
+- `NULL` (case-insensitive)
+- Empty strings in quoted fields: `""`
+
+## Error Handling
+
+### Row-Level Errors
+
+With `atomicity=skipRow` (default), rows with errors are skipped:
+
+<ResponseExample>
+```json Response
+{
+  "status": "OK",
+  "location": "sensors",
+  "rowsRejected": 5,
+  "rowsImported": 995,
+  "header": true,
+  "columns": [
+    {"name": "timestamp", "type": "TIMESTAMP", "size": 8, "errors": 3},
+    {"name": "temperature", "type": "DOUBLE", "size": 8, "errors": 2}
+  ]
+}
+```
+</ResponseExample>
+
+The `errors` field shows how many errors occurred per column.
+
+### Import Errors
+
+Common error responses:
+
+```json
+{
+  "status": "invalid value in 'Content-Disposition' multipart header"
+}
+```
+
+```json
+{
+  "status": "table does not exist [table=nonexistent]"
+}
+```
+
+## Performance Tips
+
+<Tip>
+  **Increase commit batch size**: Set `maxUncommittedRows=100000` for large imports to reduce commit overhead.
+</Tip>
+
+<Tip>
+  **Use SYMBOL for repeated strings**: Columns with low cardinality (e.g., sensor IDs, status codes) benefit from SYMBOL type.
+</Tip>
+
+<Tip>
+  **Partition by DAY**: For time-series data, `partitionBy=DAY` provides the best balance of query performance and manageability.
+</Tip>
+
+<Warning>
+  **Large files**: For files over 1GB, consider using the PostgreSQL wire protocol with `COPY` for better performance.
+</Warning>
+
+<Info>
+  **Out-of-order data**: Use `o3MaxLag` to handle late-arriving data efficiently. QuestDB can merge out-of-order data up to the specified lag.
+</Info>
+
+## Multipart Upload Example (Python)
+
+```python
+import requests
+
+url = 'http://localhost:9000/imp'
+params = {
+    'name': 'sensors',
+    'timestamp': 'timestamp',
+    'partitionBy': 'DAY',
+    'fmt': 'json'
+}
+
+with open('sensors.csv', 'rb') as f:
+    files = {'data': f}
+    response = requests.post(url, params=params, files=files)
+    print(response.json())
+```
+
+## Limits and Configuration
+
+Configure import limits in `server.conf`:
+
+```properties
+# Maximum size of HTTP request
+http.receive.buffer.size=1m
+
+# Maximum size of multipart form data
+http.multipart.max.size=1g
+
+# Default max uncommitted rows
+cairo.max.uncommitted.rows=1000
+```

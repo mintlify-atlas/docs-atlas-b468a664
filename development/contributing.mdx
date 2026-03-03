@@ -1,0 +1,247 @@
+---
+title: Contributing to QuestDB
+description: Guidelines for contributing to QuestDB, including quality standards, testing requirements, and PR conventions.
+---
+
+## Overview
+
+QuestDB is a production-grade time-series database serving critical use cases. All contributions must meet high standards for quality and reliability. This guide covers the contribution process, quality expectations, and development workflows.
+
+## License and Conduct
+
+By contributing to QuestDB, you agree that your contributions will be licensed under the [Apache License 2.0](https://github.com/questdb/questdb/blob/master/LICENSE.txt). No CLA or DCO signature is required.
+
+Please review the [Code of Conduct](https://github.com/questdb/questdb/blob/master/CODE_OF_CONDUCT.md) before participating.
+
+## Quality Standards
+
+QuestDB maintainers enforce strict quality standards:
+
+### Core Requirements
+
+- **Exhaustive testing required** — every contribution must include comprehensive tests
+- **Problem-focused changes only** — contributions must solve a real problem; superficial changes (spelling fixes in comments, whitespace adjustments, stylistic tweaks) are not accepted
+- **Minimize change surface area** — keep changes focused and minimal to reduce risk
+- **Additive and non-breaking** — make every effort to avoid breaking existing behavior; if a breaking change is truly unavoidable, join [Slack](https://slack.questdb.io/) to discuss it before starting implementation
+- **No architectural changes without discussion** — large-scale or structural changes must be discussed in an issue before implementation begins
+
+### High-Risk Contributions
+
+Changes that affect core data paths, storage formats, or wire protocols are considered high-risk. These require prior discussion and approval from maintainers before any code is written.
+
+## Environment Setup
+
+See [Building from Source](/development/building) for detailed instructions on setting up your development environment.
+
+### Prerequisites
+
+- Operating system: x86-64 or ARM64 (Windows, Linux, FreeBSD, macOS)
+- Java 17 64-bit (strict requirement — no earlier, no later)
+- Maven 3 (latest version recommended)
+- C compiler, CMake — for C library contributions (optional)
+
+**Note for Apple Silicon (ARM64) users:** Most tests will run normally. However, JIT-related tests are x86-64 only and will be skipped on ARM. If you are contributing to JIT functionality, use an x86-64 machine or run an x86-64 JDK under Rosetta emulation.
+
+### Setting up JAVA_HOME
+
+`JAVA_HOME` is required by Maven:
+
+```bash
+# Linux/macOS
+export JAVA_HOME="/path/to/java/"
+
+# Windows
+set JAVA_HOME="c:\path\to\java directory"
+```
+
+Ensure `JAVA_HOME` points to the root of the Java directory (e.g., `C:\Users\me\dev\jdk-17`), **not** the `bin` subdirectory.
+
+### Code Formatting
+
+Code is formatted using configuration files in the `.idea` directory. All contributed code should be formatted before submitting a PR.
+
+In IntelliJ IDEA:
+1. Open **File | Settings**
+2. Choose **Tools | Actions on Save**
+3. Select **Reformat and Rearrange Code**
+4. Click **Apply**
+
+Or format files manually by selecting them and choosing **Code | Reformat File**.
+
+## Coding Guidelines
+
+### Java Conventions
+
+Java class members are grouped by kind (static vs. instance) and visibility, and sorted alphabetically. When adding new methods or fields, insert them in the correct alphabetical position among existing members of the same kind.
+
+**Use modern Java features:**
+- Enhanced switch
+- Multiline string literals
+- Pattern variables in instanceof checks
+
+**Boolean naming:** Use `is...` or `has...` prefix for boolean variables, fields, and methods.
+
+**NULL handling:** Always consider NULL behavior when dealing with column data, expression results, and SQL statements. Distinguish NULL as a sentinel value ("not initialized yet") vs. an actual NULL value.
+
+### Zero-GC Requirements
+
+QuestDB is zero-GC along critical paths. Contributions must not allocate on hot paths:
+
+- **No allocations on critical paths** — query execution and data ingestion must not trigger garbage collection
+- **No string concatenation** — use `StringSink` instead of `+` or `StringBuilder`
+- **No string creation** — work with `CharSequence`, `Utf8Sequence`, or direct memory
+- **Safe object reuse and pooling** — reuse objects rather than creating new ones; use existing pool implementations
+- **No throwing new exceptions** — use pre-allocated exception instances or error codes on hot paths
+- **Use QuestDB collections** — avoid JDK collections (`ArrayList`, `HashMap`); use QuestDB's internal implementations (`ObjList`, `CharSequenceIntHashMap`)
+- **Watch out for lambdas** — lambdas can allocate; cache them if you must use them
+
+If you're unsure how to achieve zero-GC, reach out via Slack.
+
+### Dependencies
+
+QuestDB does not have third-party Java dependencies. Rather than using libraries, algorithms are implemented from first principles to ensure a perfect fit with existing code. Contributions must not add third-party dependencies.
+
+## Testing
+
+See [Testing](/development/testing) for detailed testing guidelines and conventions.
+
+### Running Tests
+
+```bash
+# Run full test suite
+mvn test
+
+# Run a specific test class
+mvn -Dtest=ClassNameTest test
+
+# Run a specific test method
+mvn -Dtest=ClassNameTest#methodName test
+```
+
+### Test Requirements
+
+- Write all tests using `assertMemoryLeak()` (except narrow unit tests that provably don't allocate native memory)
+- Resource leaks are a pain point — think carefully about all code paths, especially error paths
+- Test correct resource cleanup on each path
+
+### Performance Testing
+
+For changes that may impact performance:
+- Benchmark before and after your changes
+- Use [row generator functions](https://questdb.io/docs/query/functions/row-generator/) to create large datasets
+- Include data volume and performance figures (before/after) in your PR description
+
+## Git & PR Conventions
+
+### Commit Messages
+
+Use [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/) for commit messages:
+
+```
+feat(sql): add support for X in Y
+fix(core): avoid NPE when Z
+test(ilp): add regression test for issue #1234
+```
+
+Commit titles do NOT use Conventional Commits prefixes. Keep them short (up to 50 chars) and descriptive in plain English. Always include a full long-form description in the commit message body.
+
+### PR Title Format
+
+PR titles must follow Conventional Commits format: `type(scope): description`
+
+- Examples: `fix(sql): fix DECIMAL comparison`, `feat(core): add WAL support`
+- The description is copied to release notes, so it must read well on its own
+- Repeat the verb (e.g., `fix(sql): fix ...` not `fix(sql): DECIMAL comparison ...`)
+- Speak to the end-user about positive impact, not internal implementation details
+
+### PR Description Requirements
+
+Before opening a PR, ensure:
+
+1. **Code is formatted** as per the repo's settings
+2. **Tests pass locally**; add/adjust tests for your changes
+3. **No new third-party dependencies**
+4. **Commit messages follow Conventional Commits**
+5. **PR description includes:**
+   - Link to the relevant issue
+   - Clear explanation of **why** the change is needed
+   - Technical rationale and approach taken
+   - For performance-related changes: before/after benchmarks with data volumes
+
+Reviewers should not have to reverse-engineer algorithms from code.
+
+### PR Labels
+
+Always add GitHub labels consistent with the PR title.
+
+**Common labels:** `Bug`, `CI`, `Compatibility`, `Core`, `Documentation`, `Enhancement`, `Flaky Test`, `ILP`, `Materialized View`, `New feature`, `Performance`, `Postgres Wire`, `REST API`, `SQL`, `Security`, `UI`, `WAL`, `Windows`, `regression`, `rust`, `storage`.
+
+### Writing Style
+
+Use **active voice** in commit messages, PR descriptions, and code comments. Name the acting subject — a class, method, caller, or component.
+
+**Good:**
+- "`determineExportMode()` inspects the compiled factory"
+- "`setUp()` pre-computes per-column metadata into flat arrays"
+- "The ring queue passes the factory to the exporter"
+
+**Avoid:**
+- "The export mode is determined by inspecting the compiled factory"
+- "Per-column metadata are pre-computed into flat arrays at setup time"
+- "The factory is passed through the ring queue to the exporter"
+
+**PR tone:** Use a level-headed, analytical tone. Present both positive and negative effects with equal weight. Don't cherry-pick good results, don't use superlatives or bold emphasis on numbers. Point out regressions and tradeoffs as prominently as improvements.
+
+### Branching
+
+- External contributors: contribute from forks of the repository
+- Internal contributors (QuestDB team): prefix branch names with initials (e.g., `jd/fix-parser-bug`)
+
+## Pull Request Process
+
+1. **Reviews begin** once the PR is marked ready and CI passes
+2. **Monitor your PR** — we will not always remind you to check CI status
+3. **PRs open for more than 2 weeks with failing CI will be closed**
+4. **Massive PRs from first-time contributors will be rejected** — start with smaller, focused contributions
+
+## Common Issues
+
+### UI returns 404 on localhost:9000
+
+The web console artifacts are not present. Run:
+
+```bash
+mvn clean package -DskipTests -P build-web-console
+```
+
+### Tests fail on Windows
+
+Antivirus software may cause tests to fail. Typical indicators:
+- Tests pass on CI but fail locally
+- HTTP chunk size assertion failures (missing initial zeroes)
+- Test timeouts
+- JVM crashes
+
+For ESET products:
+- Disable "application protocol content filtering", or
+- Add `127.0.0.1` to "Excluded IP addresses" in advanced settings
+
+## Finding Issues to Work On
+
+Search for issues labeled:
+- [`good first issue`](https://github.com/questdb/questdb/labels/Good%20first%20issue)
+- [`help wanted`](https://github.com/questdb/questdb/labels/Help%20wanted)
+
+Before claiming an issue, ensure you understand the [quality standards](#quality-standards) and can meet the requirements.
+
+## Getting Help
+
+- Join the [Slack community](https://slack.questdb.io/) for questions and discussions
+- Open an [issue](https://github.com/questdb/questdb/issues) for bug reports or feature requests
+- For security bugs, see [SECURITY.md](https://github.com/questdb/questdb/blob/master/SECURITY.md)
+
+## Related Pages
+
+- [Building from Source](/development/building)
+- [Testing Conventions](/development/testing)
+- [Architecture Overview](/development/architecture)

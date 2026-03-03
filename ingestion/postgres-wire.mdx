@@ -1,0 +1,506 @@
+---
+title: PostgreSQL Wire Protocol
+description: Ingest data using the PostgreSQL wire protocol with INSERT statements
+---
+
+QuestDB implements the PostgreSQL wire protocol, allowing you to connect using any PostgreSQL client and execute INSERT statements to load data.
+
+## Overview
+
+The PostgreSQL wire protocol provides:
+
+- **SQL INSERT statements** for data ingestion
+- **Standard PostgreSQL compatibility** with psql, JDBC, and other drivers
+- **Prepared statements** for efficient repeated inserts
+- **Authentication** with username and password
+- **Full SQL support** including DDL and queries
+
+**Default Port:** 8812
+
+## Configuration
+
+### Server Configuration
+
+Configure PostgreSQL wire protocol in `conf/server.conf`:
+
+```properties
+# Enable PostgreSQL wire protocol
+pg.enabled=true
+
+# Bind address and port
+pg.net.bind.to=0.0.0.0:8812
+
+# Default credentials
+pg.user=admin
+pg.password=quest
+
+# Read-only user (optional)
+pg.readonly.user.enabled=false
+pg.readonly.user=user
+pg.readonly.password=quest
+
+# Connection limits
+pg.net.connection.limit=64
+pg.net.connection.timeout=300000
+
+# Buffer sizes
+pg.net.recv.buf.size=1048576
+pg.net.send.buf.size=1048576
+```
+
+### Authentication
+
+QuestDB uses cleartext password authentication by default:
+
+- **Admin user:** Full read/write access (default: admin/quest)
+- **Read-only user:** Query-only access (optional, disabled by default)
+
+Configure credentials via server.conf or environment variables:
+
+```bash
+export QDB_PG_USER=admin
+export QDB_PG_PASSWORD=your_password
+```
+
+## Connecting to QuestDB
+
+### Using psql
+
+Connect using the PostgreSQL command-line client:
+
+```bash
+psql -h localhost -p 8812 -U admin -d qdb
+```
+
+When prompted, enter the password (default: `quest`).
+
+### Using JDBC
+
+**Maven Dependency:**
+```xml
+<dependency>
+    <groupId>org.postgresql</groupId>
+    <artifactId>postgresql</artifactId>
+    <version>42.7.0</version>
+</dependency>
+```
+
+**Java Connection:**
+```java
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.PreparedStatement;
+import java.util.Properties;
+
+public class PostgresWireExample {
+    public static void main(String[] args) throws Exception {
+        Properties properties = new Properties();
+        properties.setProperty("user", "admin");
+        properties.setProperty("password", "quest");
+        properties.setProperty("sslmode", "disable");
+        
+        String url = "jdbc:postgresql://localhost:8812/qdb";
+        
+        try (Connection connection = DriverManager.getConnection(url, properties)) {
+            System.out.println("Connected to QuestDB");
+            
+            // Create table
+            connection.createStatement().execute(
+                "CREATE TABLE IF NOT EXISTS trades (" +
+                "  symbol SYMBOL," +
+                "  price DOUBLE," +
+                "  amount DOUBLE," +
+                "  timestamp TIMESTAMP" +
+                ") timestamp(timestamp) PARTITION BY DAY WAL"
+            );
+            
+            // Insert data
+            String sql = "INSERT INTO trades VALUES (?, ?, ?, ?)";
+            try (PreparedStatement stmt = connection.prepareStatement(sql)) {
+                stmt.setString(1, "ETH-USD");
+                stmt.setDouble(2, 2615.54);
+                stmt.setDouble(3, 0.00044);
+                stmt.setTimestamp(4, new java.sql.Timestamp(System.currentTimeMillis()));
+                stmt.execute();
+            }
+            
+            System.out.println("Data inserted successfully");
+        }
+    }
+}
+```
+
+### Using Python (psycopg2)
+
+**Install:**
+```bash
+pip install psycopg2-binary
+```
+
+**Python Code:**
+```python
+import psycopg2
+import datetime
+
+# Connect to QuestDB
+conn = psycopg2.connect(
+    host='localhost',
+    port=8812,
+    user='admin',
+    password='quest',
+    database='qdb'
+)
+
+print("Connected to QuestDB")
+
+# Create table
+with conn.cursor() as cur:
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS trades (
+            symbol SYMBOL,
+            price DOUBLE,
+            amount DOUBLE,
+            timestamp TIMESTAMP
+        ) timestamp(timestamp) PARTITION BY DAY WAL
+    """)
+    conn.commit()
+
+# Insert data using prepared statement
+with conn.cursor() as cur:
+    cur.execute(
+        "INSERT INTO trades VALUES (%s, %s, %s, %s)",
+        ('ETH-USD', 2615.54, 0.00044, datetime.datetime.now())
+    )
+    conn.commit()
+
+print("Data inserted successfully")
+
+# Query data
+with conn.cursor() as cur:
+    cur.execute("SELECT * FROM trades LIMIT 10")
+    for row in cur.fetchall():
+        print(row)
+
+conn.close()
+```
+
+### Using Node.js (pg)
+
+**Install:**
+```bash
+npm install pg
+```
+
+**JavaScript Code:**
+```javascript
+const { Client } = require('pg');
+
+const client = new Client({
+  host: 'localhost',
+  port: 8812,
+  user: 'admin',
+  password: 'quest',
+  database: 'qdb',
+});
+
+async function run() {
+  await client.connect();
+  console.log('Connected to QuestDB');
+  
+  // Create table
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS trades (
+      symbol SYMBOL,
+      price DOUBLE,
+      amount DOUBLE,
+      timestamp TIMESTAMP
+    ) timestamp(timestamp) PARTITION BY DAY WAL
+  `);
+  
+  // Insert data
+  await client.query(
+    'INSERT INTO trades VALUES ($1, $2, $3, $4)',
+    ['ETH-USD', 2615.54, 0.00044, new Date()]
+  );
+  
+  console.log('Data inserted successfully');
+  
+  // Query data
+  const res = await client.query('SELECT * FROM trades LIMIT 10');
+  console.log(res.rows);
+  
+  await client.end();
+}
+
+run().catch(console.error);
+```
+
+## INSERT Syntax
+
+### Single Row Insert
+
+```sql
+INSERT INTO trades VALUES ('ETH-USD', 2615.54, 0.00044, '2022-03-18T18:03:57.609Z');
+```
+
+### Multiple Row Insert
+
+```sql
+INSERT INTO trades VALUES 
+  ('ETH-USD', 2615.54, 0.00044, '2022-03-18T18:03:57.609Z'),
+  ('BTC-USD', 43250.75, 0.0012, '2022-03-18T18:04:12.334Z'),
+  ('SOL-USD', 95.33, 1.5, '2022-03-18T18:04:28.891Z');
+```
+
+### INSERT with Column Names
+
+```sql
+INSERT INTO trades (symbol, price, amount, timestamp) 
+VALUES ('ETH-USD', 2615.54, 0.00044, '2022-03-18T18:03:57.609Z');
+```
+
+### INSERT from SELECT
+
+```sql
+INSERT INTO trades_archive 
+SELECT * FROM trades 
+WHERE timestamp < dateadd('d', -30, now());
+```
+
+## Data Types
+
+QuestDB PostgreSQL wire protocol supports standard SQL types:
+
+| SQL Type | QuestDB Type | Example |
+|----------|--------------|----------|
+| BOOLEAN | BOOLEAN | true |
+| BYTE | BYTE | 127 |
+| SHORT | SHORT | 32767 |
+| INT | INT | 2147483647 |
+| LONG | LONG | 9223372036854775807 |
+| FLOAT | FLOAT | 3.14159 |
+| DOUBLE | DOUBLE | 3.141592653589793 |
+| STRING | STRING | 'text' |
+| SYMBOL | SYMBOL | 'symbol_value' |
+| TIMESTAMP | TIMESTAMP | '2022-03-18T18:03:57.609Z' |
+| DATE | DATE | '2022-03-18' |
+| UUID | UUID | '11111111-1111-1111-1111-111111111111' |
+| LONG256 | LONG256 | '0x123abc...' |
+| GEOHASH | GEOHASH | ##0110 |
+
+## Prepared Statements
+
+Prepared statements improve performance for repeated inserts:
+
+### JDBC Example
+
+```java
+String sql = "INSERT INTO trades VALUES (?, ?, ?, ?)";
+try (PreparedStatement stmt = connection.prepareStatement(sql)) {
+    for (Trade trade : trades) {
+        stmt.setString(1, trade.getSymbol());
+        stmt.setDouble(2, trade.getPrice());
+        stmt.setDouble(3, trade.getAmount());
+        stmt.setTimestamp(4, trade.getTimestamp());
+        stmt.addBatch();
+    }
+    stmt.executeBatch();
+}
+```
+
+### Python Example
+
+```python
+with conn.cursor() as cur:
+    # Prepare the statement
+    cur.execute("PREPARE insert_trade AS INSERT INTO trades VALUES ($1, $2, $3, $4)")
+    
+    # Execute multiple times
+    for trade in trades:
+        cur.execute("EXECUTE insert_trade(%s, %s, %s, %s)",
+                   (trade['symbol'], trade['price'], trade['amount'], trade['timestamp']))
+    
+    conn.commit()
+```
+
+## Batch Inserts
+
+For optimal performance, batch multiple rows in a single INSERT:
+
+```java
+String sql = "INSERT INTO trades VALUES (?, ?, ?, ?)";
+try (PreparedStatement stmt = connection.prepareStatement(sql)) {
+    for (int i = 0; i < 10_000; i++) {
+        stmt.setString(1, "ETH-USD");
+        stmt.setDouble(2, 2600 + Math.random() * 100);
+        stmt.setDouble(3, Math.random());
+        stmt.setTimestamp(4, new Timestamp(System.currentTimeMillis()));
+        stmt.addBatch();
+        
+        // Execute every 1000 rows
+        if (i % 1000 == 0) {
+            stmt.executeBatch();
+        }
+    }
+    // Execute remaining
+    stmt.executeBatch();
+}
+```
+
+## Performance Optimization
+
+### Use WAL Tables
+
+WAL (Write-Ahead Log) tables provide best INSERT performance:
+
+```sql
+CREATE TABLE trades (
+    symbol SYMBOL,
+    price DOUBLE,
+    amount DOUBLE,
+    timestamp TIMESTAMP
+) timestamp(timestamp) PARTITION BY DAY WAL;
+```
+
+### Batch Size
+
+Optimal batch size depends on row size:
+- Small rows: 1000-5000 per batch
+- Large rows: 100-500 per batch
+
+### Connection Pooling
+
+Use connection pooling for concurrent inserts:
+
+```java
+import com.zaxxer.hikari.HikariConfig;
+import com.zaxxer.hikari.HikariDataSource;
+
+HikariConfig config = new HikariConfig();
+config.setJdbcUrl("jdbc:postgresql://localhost:8812/qdb");
+config.setUsername("admin");
+config.setPassword("quest");
+config.setMaximumPoolSize(10);
+
+HikariDataSource ds = new HikariDataSource(config);
+```
+
+### Partition Strategy
+
+Choose appropriate partitioning for your data:
+
+```sql
+-- High-frequency data
+CREATE TABLE metrics (...) timestamp(ts) PARTITION BY HOUR;
+
+-- Daily data
+CREATE TABLE trades (...) timestamp(ts) PARTITION BY DAY;
+
+-- Low-frequency data  
+CREATE TABLE reports (...) timestamp(ts) PARTITION BY MONTH;
+```
+
+## Limitations
+
+### Not Supported
+
+- **DELETE statements** - Use DROP PARTITION or table recreation
+- **UPDATE statements** - QuestDB is append-only
+- **Transactions** - Auto-commit mode only
+- **Foreign keys** - No referential integrity constraints
+- **Triggers** - Not implemented
+- **Stored procedures** - Not implemented
+
+### QuestDB-Specific SQL
+
+Some QuestDB SQL extensions may not work through PostgreSQL wire:
+- SAMPLE BY (use SELECT instead)
+- LATEST ON (use SELECT instead)
+- Custom timestamp functions
+
+Use the HTTP `/exec` endpoint for QuestDB-specific SQL features.
+
+## Error Handling
+
+### Common Errors
+
+**Connection Refused:**
+```
+psql: error: connection to server at "localhost" (127.0.0.1), port 8812 failed
+```
+Solution: Verify `pg.enabled=true` in server.conf
+
+**Authentication Failed:**
+```
+FATAL: password authentication failed for user "admin"
+```
+Solution: Check credentials in server.conf
+
+**Table Doesn't Exist:**
+```
+ERROR: table does not exist [table=trades]
+```
+Solution: Create table first with CREATE TABLE
+
+**Type Mismatch:**
+```
+ERROR: inconvertible types: DOUBLE -> INT
+```
+Solution: Ensure INSERT values match column types
+
+## Monitoring
+
+Monitor PostgreSQL wire connections:
+
+```sql
+-- Check active connections (via HTTP /exec)
+SELECT * FROM sys.connections;
+```
+
+Metrics available at `/metrics` endpoint:
+- `questdb_pg_wire_connections` - Active connections
+- `questdb_pg_wire_queries_total` - Total queries executed
+
+## Complete Example
+
+**Create and populate a table:**
+
+```sql
+-- Create table
+CREATE TABLE IF NOT EXISTS sensors (
+    sensor_id SYMBOL,
+    location SYMBOL,
+    temperature DOUBLE,
+    humidity DOUBLE,
+    timestamp TIMESTAMP
+) timestamp(timestamp) PARTITION BY DAY WAL;
+
+-- Insert data
+INSERT INTO sensors VALUES 
+    ('s001', 'office', 22.5, 0.45, '2024-01-15T10:00:00.000Z'),
+    ('s002', 'warehouse', 18.3, 0.62, '2024-01-15T10:00:00.000Z'),
+    ('s003', 'datacenter', 24.1, 0.38, '2024-01-15T10:00:00.000Z');
+
+-- Query data
+SELECT sensor_id, location, temperature, timestamp 
+FROM sensors 
+WHERE timestamp > dateadd('h', -1, now())
+ORDER BY timestamp DESC;
+```
+
+## Best Practices
+
+1. **Use prepared statements** - Better performance for repeated inserts
+2. **Batch inserts** - Group multiple rows in single INSERT
+3. **Enable WAL** - Best performance for streaming inserts
+4. **Use symbols** - For frequently repeated string values
+5. **Specify timestamp** - Don't rely on system time for historical data
+6. **Connection pooling** - For concurrent applications
+7. **Appropriate partitioning** - Match data frequency
+8. **Monitor connections** - Check sys.connections table
+
+## Related Topics
+
+- [InfluxDB Line Protocol](/ingestion/influxdb-line-protocol) - High-throughput time-series ingestion
+- [REST API](/ingestion/rest-api) - HTTP endpoints for SQL execution
+- [SQL Reference](/sql) - Complete SQL syntax guide

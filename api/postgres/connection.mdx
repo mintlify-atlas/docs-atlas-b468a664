@@ -1,0 +1,442 @@
+---
+title: PostgreSQL Connection
+description: Connect to QuestDB using PostgreSQL wire protocol with various drivers and languages
+---
+
+Connect to QuestDB using any PostgreSQL-compatible driver or client. QuestDB listens on port **8812** by default for PostgreSQL wire protocol connections.
+
+## Connection string format
+
+The standard PostgreSQL connection string format:
+
+```
+postgresql://[username[:password]@][host][:port]/[database][?parameters]
+```
+
+For QuestDB:
+
+```
+postgresql://admin:quest@localhost:8812/qdb
+```
+
+### Connection parameters
+
+| Parameter | Value | Required |
+|-----------|-------|----------|
+| **Host** | `localhost` or server IP | Yes |
+| **Port** | `8812` (default) | Yes |
+| **Database** | `qdb` | Yes |
+| **Username** | `admin` (default) | Yes |
+| **Password** | `quest` (default) | Yes |
+| **SSL Mode** | `disable`, `require`, etc. | No |
+
+## Python
+
+### psycopg2
+
+```python
+import psycopg2
+
+# Connect to QuestDB
+conn = psycopg2.connect(
+    host='localhost',
+    port=8812,
+    user='admin',
+    password='quest',
+    database='qdb'
+)
+
+# Create a cursor
+cur = conn.cursor()
+
+# Execute a query
+cur.execute('SELECT * FROM trades LIMIT 10')
+
+# Fetch results
+rows = cur.fetchall()
+for row in rows:
+    print(row)
+
+# Close cursor and connection
+cur.close()
+conn.close()
+```
+
+### psycopg3
+
+```python
+import psycopg
+
+# Connect to QuestDB
+with psycopg.connect(
+    'postgresql://admin:quest@localhost:8812/qdb'
+) as conn:
+    with conn.cursor() as cur:
+        # Execute a query
+        cur.execute('SELECT * FROM trades LIMIT 10')
+        
+        # Fetch results
+        for row in cur:
+            print(row)
+```
+
+### SQLAlchemy
+
+```python
+from sqlalchemy import create_engine, text
+
+# Create engine
+engine = create_engine(
+    'postgresql://admin:quest@localhost:8812/qdb'
+)
+
+# Execute query
+with engine.connect() as conn:
+    result = conn.execute(
+        text('SELECT * FROM trades LIMIT 10')
+    )
+    for row in result:
+        print(row)
+```
+
+## Java
+
+### JDBC
+
+```java
+import java.sql.*;
+import java.util.Properties;
+
+public class QuestDBExample {
+    public static void main(String[] args) throws SQLException {
+        Properties properties = new Properties();
+        properties.setProperty("user", "admin");
+        properties.setProperty("password", "quest");
+        properties.setProperty("sslmode", "disable");
+        
+        String url = "jdbc:postgresql://localhost:8812/qdb";
+        
+        try (Connection conn = DriverManager.getConnection(url, properties)) {
+            try (Statement stmt = conn.createStatement()) {
+                ResultSet rs = stmt.executeQuery(
+                    "SELECT * FROM trades LIMIT 10"
+                );
+                
+                while (rs.next()) {
+                    System.out.println(rs.getString(1));
+                }
+            }
+        }
+    }
+}
+```
+
+### Maven dependency
+
+```xml
+<dependency>
+    <groupId>org.postgresql</groupId>
+    <artifactId>postgresql</artifactId>
+    <version>42.7.1</version>
+</dependency>
+```
+
+### Prepared statements
+
+```java
+String sql = "INSERT INTO trades VALUES (?, ?, ?, ?)";
+
+try (PreparedStatement ps = conn.prepareStatement(sql)) {
+    ps.setString(1, "BTC-USD");
+    ps.setDouble(2, 50000.0);
+    ps.setLong(3, 100);
+    ps.setTimestamp(4, new Timestamp(System.currentTimeMillis()));
+    
+    ps.executeUpdate();
+}
+```
+
+## Node.js
+
+### node-postgres (pg)
+
+```javascript
+const { Client } = require('pg');
+
+const client = new Client({
+  host: 'localhost',
+  port: 8812,
+  user: 'admin',
+  password: 'quest',
+  database: 'qdb'
+});
+
+await client.connect();
+
+const res = await client.query(
+  'SELECT * FROM trades LIMIT 10'
+);
+
+console.log(res.rows);
+
+await client.end();
+```
+
+### Connection pooling
+
+```javascript
+const { Pool } = require('pg');
+
+const pool = new Pool({
+  host: 'localhost',
+  port: 8812,
+  user: 'admin',
+  password: 'quest',
+  database: 'qdb',
+  max: 20,
+  idleTimeoutMillis: 30000,
+  connectionTimeoutMillis: 2000,
+});
+
+// Use the pool
+const result = await pool.query(
+  'SELECT * FROM trades WHERE symbol = $1',
+  ['BTC-USD']
+);
+
+console.log(result.rows);
+```
+
+## Go
+
+### pgx
+
+```go
+package main
+
+import (
+    "context"
+    "fmt"
+    "log"
+    
+    "github.com/jackc/pgx/v5"
+)
+
+func main() {
+    ctx := context.Background()
+    
+    conn, err := pgx.Connect(ctx,
+        "postgres://admin:quest@localhost:8812/qdb",
+    )
+    if err != nil {
+        log.Fatal(err)
+    }
+    defer conn.Close(ctx)
+    
+    rows, err := conn.Query(ctx,
+        "SELECT * FROM trades LIMIT 10",
+    )
+    if err != nil {
+        log.Fatal(err)
+    }
+    defer rows.Close()
+    
+    for rows.Next() {
+        var symbol string
+        var price float64
+        
+        err = rows.Scan(&symbol, &price)
+        if err != nil {
+            log.Fatal(err)
+        }
+        
+        fmt.Printf("%s: %.2f\n", symbol, price)
+    }
+}
+```
+
+## C#
+
+### Npgsql
+
+```csharp
+using Npgsql;
+
+var connString = "Host=localhost;Port=8812;Username=admin;" +
+                 "Password=quest;Database=qdb";
+
+using var conn = new NpgsqlConnection(connString);
+await conn.OpenAsync();
+
+using var cmd = new NpgsqlCommand(
+    "SELECT * FROM trades LIMIT 10", conn
+);
+
+using var reader = await cmd.ExecuteReaderAsync();
+
+while (await reader.ReadAsync())
+{
+    var symbol = reader.GetString(0);
+    var price = reader.GetDouble(1);
+    Console.WriteLine($"{symbol}: {price}");
+}
+```
+
+## Rust
+
+### tokio-postgres
+
+```rust
+use tokio_postgres::{NoTls, Error};
+
+#[tokio::main]
+async fn main() -> Result<(), Error> {
+    let (client, connection) = tokio_postgres::connect(
+        "host=localhost port=8812 user=admin password=quest dbname=qdb",
+        NoTls,
+    ).await?;
+    
+    tokio::spawn(async move {
+        if let Err(e) = connection.await {
+            eprintln!("connection error: {}", e);
+        }
+    });
+    
+    let rows = client
+        .query("SELECT * FROM trades LIMIT 10", &[])
+        .await?;
+    
+    for row in rows {
+        let symbol: &str = row.get(0);
+        let price: f64 = row.get(1);
+        println!("{}: {}", symbol, price);
+    }
+    
+    Ok(())
+}
+```
+
+## Command-line clients
+
+### psql
+
+Connect using the standard PostgreSQL command-line client:
+
+```bash
+psql -h localhost -p 8812 -U admin -d qdb
+```
+
+With password prompt:
+
+```bash
+PSYCOPG_PASSWORD=quest psql -h localhost -p 8812 -U admin -d qdb
+```
+
+Execute a query:
+
+```bash
+psql -h localhost -p 8812 -U admin -d qdb \
+  -c "SELECT * FROM trades LIMIT 10"
+```
+
+### pgcli
+
+Enhanced PostgreSQL CLI with auto-completion:
+
+```bash
+pgcli postgres://admin:quest@localhost:8812/qdb
+```
+
+## TLS/SSL connections
+
+To enable TLS for PostgreSQL wire protocol connections:
+
+```properties title="server.conf"
+# Enable TLS
+pg.net.tls.enabled=true
+
+# Certificate paths
+pg.net.tls.certificate.path=/path/to/certificate.crt
+pg.net.tls.private.key.path=/path/to/private.key
+```
+
+Connect with SSL enabled:
+
+```python
+# Python example
+conn = psycopg2.connect(
+    host='localhost',
+    port=8812,
+    user='admin',
+    password='quest',
+    database='qdb',
+    sslmode='require'
+)
+```
+
+## Connection pooling
+
+For production applications, use connection pooling:
+
+- **Python**: Use `psycopg2.pool` or SQLAlchemy's built-in pooling
+- **Java**: Use HikariCP or Apache DBCP
+- **Node.js**: Use `pg.Pool`
+- **Go**: Use `pgxpool`
+
+Example connection pool configuration:
+
+```python
+from psycopg2.pool import SimpleConnectionPool
+
+pool = SimpleConnectionPool(
+    minconn=1,
+    maxconn=20,
+    host='localhost',
+    port=8812,
+    user='admin',
+    password='quest',
+    database='qdb'
+)
+
+conn = pool.getconn()
+try:
+    # Use connection
+    cur = conn.cursor()
+    cur.execute('SELECT * FROM trades')
+finally:
+    pool.putconn(conn)
+```
+
+## Troubleshooting
+
+### Connection refused
+
+Ensure QuestDB is running and PostgreSQL wire protocol is enabled:
+
+```bash
+# Check if QuestDB is listening on port 8812
+netstat -an | grep 8812
+```
+
+### Authentication failed
+
+Verify username and password in `server.conf`:
+
+```properties
+pg.user=admin
+pg.password=quest
+```
+
+### Timeout errors
+
+Increase connection timeout:
+
+```properties title="server.conf"
+pg.net.connection.timeout=600000  # 10 minutes
+```
+
+## Next steps
+
+<Card title="Queries" icon="code" href="/api/postgres/queries">
+  Learn how to execute queries via PostgreSQL protocol
+</Card>

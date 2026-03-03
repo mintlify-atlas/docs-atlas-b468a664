@@ -1,0 +1,519 @@
+---
+title: Partitioning
+description: Time-based partitioning strategies in QuestDB for performance optimization and data lifecycle management
+---
+
+## Overview
+
+QuestDB automatically partitions tables based on their designated timestamp column. Partitions are directories containing column files for a specific time range, enabling efficient time-range queries and data lifecycle management.
+
+## Partition Intervals
+
+The `PartitionBy` class defines all supported partitioning strategies:
+
+```java
+// From PartitionBy.java:46-55
+public static final int DAY = 0;
+public static final int HOUR = 4;
+public static final int MONTH = 1;
+public static final int NONE = 3;
+public static final int NOT_APPLICABLE = 6;
+public static final int WEEK = 5;
+public static final int YEAR = 2;
+```
+
+Supported intervals (source:core/src/main/java/io/questdb/cairo/PartitionBy.java:46-55):
+- `HOUR` - Hourly partitions
+- `DAY` - Daily partitions (most common)
+- `WEEK` - Weekly partitions
+- `MONTH` - Monthly partitions
+- `YEAR` - Yearly partitions
+- `NONE` - No partitioning (single directory)
+
+## Creating Partitioned Tables
+
+### Daily Partitioning
+
+```sql
+CREATE TABLE trades (
+    timestamp TIMESTAMP,
+    symbol SYMBOL,
+    price DOUBLE,
+    quantity LONG
+) TIMESTAMP(timestamp) PARTITION BY DAY;
+```
+
+Directory structure:
+```
+trades/
+├── 2024-03-01/
+├── 2024-03-02/
+├── 2024-03-03/
+└── ...
+```
+
+### Hourly Partitioning
+
+For very high-frequency data:
+
+```sql
+CREATE TABLE metrics (
+    timestamp TIMESTAMP,
+    sensor_id SYMBOL,
+    value DOUBLE
+) TIMESTAMP(timestamp) PARTITION BY HOUR;
+```
+
+Directory structure:
+```
+metrics/
+├── 2024-03-01T00/
+├── 2024-03-01T01/
+├── 2024-03-01T02/
+└── ...
+```
+
+### Monthly Partitioning
+
+For lower-frequency or archival data:
+
+```sql
+CREATE TABLE monthly_reports (
+    timestamp TIMESTAMP,
+    account_id SYMBOL,
+    revenue DOUBLE
+) TIMESTAMP(timestamp) PARTITION BY MONTH;
+```
+
+Directory structure:
+```
+monthly_reports/
+├── 2024-01/
+├── 2024-02/
+├── 2024-03/
+└── ...
+```
+
+### No Partitioning
+
+For small tables or tables without time-series characteristics:
+
+```sql
+CREATE TABLE config (
+    id LONG,
+    key STRING,
+    value STRING
+) PARTITION BY NONE;
+```
+
+Directory structure:
+```
+config/
+├── default/  -- Single partition directory
+│   ├── id.d
+│   ├── key.d
+│   └── value.d
+└── ...
+```
+
+## Partition Directory Naming
+
+Partition directories use formatted timestamps:
+
+```java
+// From PartitionBy.java:99-105
+public static void setSinkForPartition(CharSink<?> path, int timestampType, int partitionBy, long timestamp) {
+    if (isPartitioned(partitionBy)) {
+        getPartitionDirFormatMethod(timestampType, partitionBy).format(timestamp, EN_LOCALE, null, path);
+        return;
+    }
+    path.putAscii(DEFAULT_PARTITION_NAME);
+}
+```
+
+Naming is handled by `PartitionBy.setSinkForPartition()` (source:core/src/main/java/io/questdb/cairo/PartitionBy.java:99-105).
+
+| Interval | Format | Example |
+|----------|--------|----------|
+| HOUR | `YYYY-MM-DDTHH` | `2024-03-15T14` |
+| DAY | `YYYY-MM-DD` | `2024-03-15` |
+| WEEK | `YYYY-Www` | `2024-W11` |
+| MONTH | `YYYY-MM` | `2024-03` |
+| YEAR | `YYYY` | `2024` |
+| NONE | `default` | `default` |
+
+## Partition Operations
+
+### Querying Specific Partitions
+
+Filter by timestamp to limit partition access:
+
+```sql
+-- Only opens March 15, 2024 partition
+SELECT * FROM trades
+WHERE timestamp BETWEEN '2024-03-15' AND '2024-03-16';
+```
+
+The query engine automatically prunes partitions outside the WHERE clause time range.
+
+### Listing Partitions
+
+```sql
+-- Show all partitions for a table
+SELECT * FROM table_partitions('trades');
+```
+
+### Dropping Partitions
+
+Delete old data efficiently:
+
+```sql
+-- Drop single partition
+ALTER TABLE trades DROP PARTITION LIST '2024-01-01';
+
+-- Drop multiple partitions
+ALTER TABLE trades DROP PARTITION LIST '2024-01-01', '2024-01-02', '2024-01-03';
+
+-- Drop partitions by date range
+ALTER TABLE trades DROP PARTITION 
+WHERE timestamp < dateadd('M', -6, now());  -- Older than 6 months
+```
+
+### Attaching Partitions
+
+Add external partition directories:
+
+```java
+// From TableWriter.java:843-865
+public AttachDetachStatus attachPartition(long timestamp, long partitionSize) {
+    // Partitioned table must have a timestamp
+    // SQL compiler will check that table has it
+    assert metadata.getTimestampIndex() > -1;
+
+    if (txWriter.attachedPartitionsContains(timestamp)) {
+        LOG.info().$"partition is already attached [path=").$substr(pathRootSize, path).I$();
+        // TODO: potentially we can merge with existing data
+        return AttachDetachStatus.ATTACH_ERR_PARTITION_EXISTS;
+    }
+
+    if (inTransaction()) {
+        assert !tableToken.isWal();
+        LOG.info().$"committing open transaction before applying attach partition command [table=").$(tableToken)
+                .$(" partition=").$ts(timestampDriver, timestamp).I$();
+        commit();
+
+        // Check that the partition we're about to attach hasn't appeared after commit
+        if (txWriter.attachedPartitionsContains(timestamp)) {
+            LOG.info().$"partition is already attached [path=").$substr(pathRootSize, path).I$();
+            return AttachDetachStatus.ATTACH_ERR_PARTITION_EXISTS;
+        }
+    }
+```
+
+Attach logic validates partition before integration (source:core/src/main/java/io/questdb/cairo/TableWriter.java:843-865).
+
+```sql
+-- Copy partition to <table_dir>/YYYY-MM-DD.attachable
+-- Then attach it
+ALTER TABLE trades ATTACH PARTITION LIST '2024-03-15';
+```
+
+### Detaching Partitions
+
+Remove partition from table without deleting:
+
+```sql
+ALTER TABLE trades DETACH PARTITION LIST '2024-03-15';
+-- Partition moved to <table_dir>/YYYY-MM-DD.detached
+```
+
+## Choosing Partition Interval
+
+### Factors to Consider
+
+1. **Data volume**: More data → finer granularity
+2. **Query patterns**: Match partition size to typical query ranges
+3. **Write frequency**: Balance partition overhead with write efficiency
+4. **Data retention**: Easier to drop entire partitions
+
+### Guidelines
+
+| Data Rate | Partition By | Rationale |
+|-----------|--------------|----------|
+| < 100K rows/day | DAY or MONTH | Avoid excessive small partitions |
+| 100K - 10M rows/day | DAY | Good balance |
+| 10M - 100M rows/day | DAY or HOUR | High volume benefits from finer granularity |
+| > 100M rows/day | HOUR | Prevents partition sizes from growing too large |
+
+### Query Pattern Considerations
+
+**Dashboard queries (recent data)**:
+```sql
+-- Typical query: last 24 hours
+SELECT * FROM metrics WHERE timestamp > dateadd('d', -1, now());
+-- Use: PARTITION BY HOUR (opens ~24 partitions)
+```
+
+**Analytical queries (weeks/months)**:
+```sql
+-- Typical query: last 30 days
+SELECT * FROM trades WHERE timestamp > dateadd('d', -30, now());
+-- Use: PARTITION BY DAY (opens ~30 partitions)
+```
+
+**Historical analysis**:
+```sql
+-- Typical query: year-over-year comparison
+SELECT * FROM sales WHERE timestamp BETWEEN '2023-01-01' AND '2024-12-31';
+-- Use: PARTITION BY MONTH (opens 24 partitions)
+```
+
+## Partition Pruning
+
+The query engine automatically skips partitions that cannot contain matching rows.
+
+### Example: Time Range Filter
+
+```sql
+SELECT count(*) FROM trades
+WHERE timestamp BETWEEN '2024-03-15' AND '2024-03-17';
+```
+
+Execution plan:
+1. Parse WHERE clause to extract timestamp bounds
+2. Determine relevant partitions: `2024-03-15`, `2024-03-16`, `2024-03-17`
+3. Skip all other partitions entirely
+4. Open and scan only 3 partition directories
+
+### Example: Point Query
+
+```sql
+SELECT * FROM trades
+WHERE timestamp = '2024-03-15T14:23:00';
+```
+
+Execution:
+1. Calculate partition: `2024-03-15` (DAY partition)
+2. Open single partition
+3. Binary search within partition using timestamp index
+
+## Partition Formats
+
+QuestDB supports multiple storage formats per partition.
+
+### Native Format
+
+Default format with individual column files:
+
+```
+2024-03-15/
+├── timestamp.d
+├── symbol.d
+├── symbol.k
+├── symbol.v
+├── price.d
+└── quantity.d
+```
+
+### Parquet Format
+
+Compressed, single-file format for archival:
+
+```
+2024-03-15/
+└── partition.parquet
+```
+
+### Converting to Parquet
+
+```sql
+-- Convert specific partition
+ALTER TABLE trades CONVERT PARTITION TO PARQUET LIST '2024-03-01';
+
+-- Convert partitions older than 30 days
+ALTER TABLE trades CONVERT PARTITION TO PARQUET
+WHERE timestamp < dateadd('d', -30, now());
+```
+
+### Mixed Format Tables
+
+```java
+// From TableReader.java:64-67
+private static final int PARTITIONS_SLOT_OFFSET_SIZE = 1;
+private static final int PARTITIONS_SLOT_OFFSET_NAME_TXN = PARTITIONS_SLOT_OFFSET_SIZE + 1;
+private static final int PARTITIONS_SLOT_OFFSET_COLUMN_VERSION = PARTITIONS_SLOT_OFFSET_NAME_TXN + 1;
+private static final int PARTITIONS_SLOT_OFFSET_FORMAT = PARTITIONS_SLOT_OFFSET_COLUMN_VERSION + 1;
+```
+
+Partition metadata tracks format per partition (source:core/src/main/java/io/questdb/cairo/TableReader.java:64-67).
+
+A single table can have:
+- Recent partitions in native format (read/write)
+- Old partitions in Parquet format (read-only, compressed)
+
+Queries transparently read from both formats:
+
+```
+trades/
+├── 2024-01-15/partition.parquet    ← Parquet (old)
+├── 2024-02-20/partition.parquet    ← Parquet (old)
+├── 2024-03-10/                     ← Native (recent)
+│   └── *.d files
+└── 2024-03-15/                     ← Native (current)
+    └── *.d files
+```
+
+## Time-To-Live (TTL)
+
+Automatic partition deletion based on age.
+
+### Setting TTL
+
+```sql
+-- Drop partitions older than 90 days
+ALTER TABLE trades SET PARAM maxUncommittedRows = 100000, 
+    o3MaxLag = 600s,
+    ttl = 90d;
+```
+
+### TTL Validation
+
+```java
+// From PartitionBy.java:124-154
+public static void validateTtlGranularity(int partitionBy, int ttlHoursOrMonths, int ttlValuePos) throws SqlException {
+    switch (partitionBy) {
+        case NONE:
+        case NOT_APPLICABLE:
+            throw SqlException.position(ttlValuePos).put("cannot set TTL on a non-partitioned table");
+        case DAY:
+            if (ttlHoursOrMonths < 0 || ttlHoursOrMonths % 24 == 0) {
+                return;
+            }
+            break;
+        // ...
+    }
+    throw SqlException.position(ttlValuePos)
+            .put("TTL value must be an integer multiple of partition size");
+}
+```
+
+TTL must align with partition intervals (source:core/src/main/java/io/questdb/cairo/PartitionBy.java:124-154).
+
+### TTL Constraints
+
+- TTL must be a multiple of partition size
+- DAY partitions: TTL in days (e.g., `30d`, `90d`)
+- HOUR partitions: TTL in hours (e.g., `72h`, `168h`)
+- MONTH partitions: TTL in months (e.g., `12M`, `24M`)
+
+## Performance Implications
+
+### Partition Count
+
+**Too few partitions**:
+- Large partition files slow down queries
+- Less parallelization opportunity
+- Harder to manage data lifecycle
+
+**Too many partitions**:
+- Overhead opening many directories
+- More file descriptors
+- Slower metadata operations
+
+**Optimal range**: 10-1000 active partitions
+
+### Parallel Query Execution
+
+QuestDB processes partitions in parallel:
+
+```sql
+-- Each worker thread processes different partitions
+SELECT symbol, avg(price)
+FROM trades
+WHERE timestamp >= '2024-01-01'
+GROUP BY symbol;
+```
+
+With 8 worker threads and 30 day-partitions:
+- Each thread processes ~4 partitions
+- Results are merged after parallel execution
+
+### Write Isolation
+
+Only the current partition is writable:
+
+```
+trades/
+├── 2024-03-13/  ← Read-only, immutable
+├── 2024-03-14/  ← Read-only, immutable
+└── 2024-03-15/  ← Writable (current partition)
+```
+
+This enables:
+- Concurrent reads of historical data
+- Safe writes to current partition
+- No locking overhead for old partitions
+
+## Best Practices
+
+### 1. Match Partition Size to Query Patterns
+
+```sql
+-- If queries typically span 1 day
+PARTITION BY DAY;  -- Good
+
+-- If queries typically span 1 hour  
+PARTITION BY HOUR;  -- Better
+```
+
+### 2. Use TTL for Automatic Cleanup
+
+```sql
+CREATE TABLE logs (
+    timestamp TIMESTAMP,
+    level SYMBOL,
+    message STRING
+) TIMESTAMP(timestamp) PARTITION BY DAY;
+
+ALTER TABLE logs SET PARAM ttl = 30d;  -- Auto-delete after 30 days
+```
+
+### 3. Convert Old Partitions to Parquet
+
+```sql
+-- Archive partitions older than 90 days
+ALTER TABLE trades CONVERT PARTITION TO PARQUET
+WHERE timestamp < dateadd('d', -90, now());
+```
+
+Benefits:
+- 3-10x compression
+- S3-compatible format
+- Reduced local storage costs
+
+### 4. Monitor Partition Sizes
+
+```sql
+-- Check partition row counts
+SELECT * FROM table_partitions('trades');
+```
+
+Aim for:
+- 1M-100M rows per partition (DAY)
+- 100K-10M rows per partition (HOUR)
+
+### 5. Align Partition Boundaries with Business Logic
+
+```sql
+-- Financial data: align to trading days
+PARTITION BY DAY;  -- Natural boundary
+
+-- IoT sensors: align to maintenance windows
+PARTITION BY WEEK;  -- Weekly maintenance
+```
+
+## See Also
+
+- [Storage Model](/concepts/storage-model) - Column-oriented storage architecture
+- [WAL Architecture](/concepts/wal) - Write-Ahead Log for concurrent writes
+- [Time-Series Database](/concepts/time-series-database) - Core concepts

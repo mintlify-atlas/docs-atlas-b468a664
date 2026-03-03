@@ -1,0 +1,377 @@
+---
+title: System Architecture
+description: High-level overview of QuestDB's architecture, component organization, and design principles.
+---
+
+## Overview
+
+QuestDB is an open-source time-series database written primarily in zero-GC Java with native C/C++ libraries for performance-critical operations. It features column-oriented storage, SIMD-accelerated vector execution, and specialized time-series SQL extensions.
+
+## Design Principles
+
+### 1. Zero-GC on Data Paths
+
+No allocations during query execution or data ingestion. Use object pools and pre-allocated buffers to avoid triggering garbage collection on hot paths.
+
+**Implementation:**
+- Custom collections (`ObjList`, `CharSequenceIntHashMap`) from `io.questdb.std` package
+- Object pooling for reusable components
+- Direct memory access via `Unsafe` class: `io.questdb.std.Unsafe`
+- Pre-allocated exception instances on hot paths
+
+### 2. No Third-Party Java Dependencies
+
+Algorithms are implemented from first principles for tight integration and performance. This ensures:
+- Perfect fit with existing code
+- Full control over memory allocation
+- No unexpected GC from external libraries
+- Minimal JAR size
+
+### 3. Native Code for Performance
+
+SIMD operations, memory management, and platform-specific optimizations in C/C++ via JNI:
+- **Vector operations:** `core/src/main/c/share/vec_agg.cpp`
+- **Memory utilities:** `core/src/main/c/share/files.c`
+- **Platform-specific:** `core/src/main/c/{linux,osx,windows,freebsd}/`
+
+See [SIMD Optimizations](/development/simd-optimization) for details.
+
+### 4. Column-Oriented Storage
+
+Data stored by column for:
+- Better compression
+- Vectorized operations (process multiple values simultaneously)
+- Efficient scans (read only needed columns)
+- Time-series optimizations
+
+See [Storage Engine](/development/storage-engine) for details.
+
+## Module Structure
+
+QuestDB repository organization:
+
+```
+questdb/
+├── core/              # Main database engine (all production code)
+├── benchmarks/        # JMH micro-benchmarks
+├── compat/            # Compatibility tests
+├── utils/             # Build utilities
+├── examples/          # Usage examples
+└── win64svc/         # Windows service wrapper
+```
+
+### Core Module
+
+All production code lives in `core/`:
+
+```
+core/
+├── src/main/java/io/questdb/   # Java source
+├── src/main/c/                 # C/C++ native libraries
+├── src/main/resources/         # Embedded resources
+├── src/test/java/              # Java tests
+└── target/                     # Build output
+```
+
+## Core Package Layout
+
+The main packages in `core/src/main/java/io/questdb/`:
+
+### Storage Engine (cairo/)
+
+**Location:** `core/src/main/java/io/questdb/cairo/`
+
+**Responsibilities:**
+- Table readers/writers
+- Columnar storage
+- Write-Ahead Log (WAL)
+- Transactions and MVCC
+- Partitioning by time
+- Indexing (bitmap indexes)
+- Memory-mapped file management
+
+**Key Classes:**
+- `CairoEngine` — Storage engine core: `io/questdb/cairo/CairoEngine.java:1`
+- `TableWriter` — Writes data to tables: `io/questdb/cairo/TableWriter.java:1`
+- `TableReader` — Reads data from tables: `io/questdb/cairo/TableReader.java:61`
+- `ColumnIndexer` — Builds bitmap indexes
+- `PartitionBy` — Time-based partitioning logic
+
+**Subdirectories:**
+- `cairo/wal/` — Write-Ahead Log implementation
+- `cairo/vm/` — Virtual memory (memory-mapped files)
+- `cairo/sql/` — SQL execution interfaces
+- `cairo/pool/` — Reader/writer pooling
+
+See [Storage Engine](/development/storage-engine) for details.
+
+### SQL Engine (griffin/)
+
+**Location:** `core/src/main/java/io/questdb/griffin/`
+
+**Responsibilities:**
+- SQL parsing
+- Query compilation
+- Query optimization
+- Code generation
+- Query execution
+
+**Key Classes:**
+- `SqlCompiler` / `SqlCompilerImpl` — SQL compilation entry point: `io/questdb/griffin/SqlCompilerImpl.java:149`
+- `SqlParser` — Parses SQL into AST
+- `SqlOptimiser` — Query optimization
+- `SqlCodeGenerator` — Generates execution plans
+- `QueryModel` — Internal query representation
+
+**Subdirectories:**
+- `griffin/engine/` — Query execution engine
+- `griffin/model/` — Query model (AST)
+- `griffin/engine/functions/` — SQL functions
+- `griffin/engine/groupby/` — Aggregation logic
+- `griffin/engine/join/` — Join algorithms
+
+See [SQL Compiler](/development/sql-compiler) for details.
+
+### Network Protocols (cutlass/)
+
+**Location:** `core/src/main/java/io/questdb/cutlass/`
+
+**Responsibilities:**
+- Network protocol implementations
+- Client-facing APIs
+
+**Subdirectories:**
+- `cutlass/pgwire/` — PostgreSQL wire protocol (port 8812)
+- `cutlass/http/` — REST API and web console (port 9000)
+- `cutlass/line/` — InfluxDB Line Protocol / ILP (port 9009)
+- `cutlass/text/` — CSV import
+
+**Key Classes:**
+- `PGServer` — PostgreSQL wire protocol server
+- `HttpServer` — HTTP/REST API server
+- `LineTcpReceiver` — ILP ingestion
+
+### Collections and Utilities (std/)
+
+**Location:** `core/src/main/java/io/questdb/std/`
+
+**Responsibilities:**
+- Zero-allocation data structures
+- Memory utilities
+- Platform abstractions
+- String handling
+- Date/time utilities
+
+**Key Classes:**
+- `ObjList` — Zero-allocation ArrayList replacement
+- `CharSequenceIntHashMap` — Zero-allocation HashMap
+- `Unsafe` — Direct memory access: `io/questdb/std/Unsafe.java:40`
+- `Vect` — SIMD vector operations (JNI): `io/questdb/std/Vect.java:27`
+- `MemoryTag` — Memory allocation tracking
+- `Numbers` — Fast numeric parsing
+- `Chars` — CharSequence utilities
+
+See [Memory Management](/development/memory-management) for details.
+
+### Message Passing (mp/)
+
+**Location:** `core/src/main/java/io/questdb/mp/`
+
+**Responsibilities:**
+- Worker pools
+- Job scheduling
+- Ring queues for inter-thread communication
+- Lock-free queues
+
+**Key Classes:**
+- `WorkerPool` — Thread pool management
+- `RingQueue` — Lock-free ring buffer
+- `Sequence` — Coordination for ring queues
+- `Job` — Base interface for background jobs
+
+### JIT Compilation (jit/)
+
+**Location:** `core/src/main/java/io/questdb/jit/`
+
+**Responsibilities:**
+- Just-in-time compilation for filters
+- Native code generation for WHERE clauses
+- x86-64 only (not available on ARM64)
+
+**Note:** JIT tests are skipped on ARM64 platforms.
+
+### Logging (log/)
+
+**Location:** `core/src/main/java/io/questdb/log/`
+
+**Responsibilities:**
+- Zero-allocation logging framework
+- Asynchronous log writing
+- Structured logging
+
+**Key Classes:**
+- `LogFactory` — Creates loggers
+- `Log` — Logger interface
+- `LogRecord` — Log entry builder
+
+## Entry Points
+
+Key starting points for understanding the codebase:
+
+### Server Startup
+
+**`ServerMain.java`** — Main server entry point: `io/questdb/ServerMain.java:69`
+
+1. Parses configuration
+2. Initializes `CairoEngine`
+3. Starts network servers (HTTP, PostgreSQL wire, ILP)
+4. Starts background jobs (WAL application, compaction, etc.)
+
+### Storage Engine
+
+**`CairoEngine.java`** — Storage engine core: `io/questdb/cairo/CairoEngine.java:1`
+
+- Manages table lifecycle
+- Provides reader/writer pools
+- Coordinates WAL application
+- Handles schema changes
+
+### SQL Compilation
+
+**`SqlCompilerImpl.java`** — SQL compilation: `io/questdb/griffin/SqlCompilerImpl.java:149`
+
+1. Parses SQL text into AST
+2. Validates and optimizes query
+3. Generates execution plan
+4. Returns `CompiledQuery` or `RecordCursorFactory`
+
+### Table I/O
+
+**`TableWriter.java`** — Table writes: `io/questdb/cairo/TableWriter.java:1`
+- Appends rows to tables
+- Handles out-of-order (O3) data
+- Manages partitions
+- Builds indexes
+
+**`TableReader.java`** — Table reads: `io/questdb/cairo/TableReader.java:61`
+- Reads column data
+- Provides partition iteration
+- Handles column versions
+- Manages memory-mapped files
+
+## Data Flow
+
+### Query Execution
+
+1. **Parse** — `SqlParser` converts SQL text to `QueryModel` (AST)
+2. **Optimize** — `SqlOptimiser` rewrites query for performance
+3. **Generate** — `SqlCodeGenerator` creates `RecordCursorFactory`
+4. **Execute** — Factory creates `RecordCursor` for iteration
+5. **Fetch** — Cursor reads from `TableReader` via memory-mapped files
+
+### Data Ingestion (ILP)
+
+1. **Receive** — `LineTcpReceiver` accepts ILP messages
+2. **Parse** — Parse line protocol format
+3. **Buffer** — Buffer rows in memory
+4. **Write** — Flush to `WalWriter` (WAL-enabled) or `TableWriter` (direct)
+5. **Apply** — Background job (`ApplyWal2TableJob`) applies WAL to table
+6. **Index** — Build indexes in background
+
+### Transaction Flow
+
+1. **Begin** — `TableWriter.beginRow()`
+2. **Populate** — Set column values
+3. **Commit** — `TableWriter.commit()` makes data visible
+4. **Transaction File** — Update `_txn` file with new metadata
+5. **Readers** — `TableReader` sees new data on next `reload()`
+
+## Memory Architecture
+
+QuestDB uses multiple memory management strategies:
+
+### Memory-Mapped Files
+
+Column data accessed via `mmap()` (OS-level file mapping):
+- **Interfaces:** `MemoryMR`, `MemoryMARW` in `cairo/vm/api/`
+- **Implementations:** `MemoryCMRImpl`, `MemoryCARWImpl`
+- **Benefits:** OS handles paging, efficient for large datasets
+
+### Off-Heap Allocation
+
+Direct native memory for temporary data structures:
+- **Managed by:** `Unsafe.malloc()`, `Unsafe.free()`
+- **Tracking:** `MemoryTag` enum tracks allocation sources
+- **Used for:** Indexes, sorting, grouping, temporary buffers
+
+See [Memory Management](/development/memory-management) for details.
+
+## Concurrency Model
+
+### Reader-Writer Concurrency
+
+- **Multiple readers:** Any number of concurrent readers per table
+- **Single writer:** At most one writer per table at a time
+- **MVCC:** Readers see consistent snapshots via transaction versioning
+- **Coordination:** `TxnScoreboard` tracks active reader transactions
+
+### Worker Pools
+
+Background work distributed across worker pools:
+- **Writer pool** — Handles WAL application
+- **Shared pool** — Query execution
+- **WAL apply pool** — Applies WAL to tables
+- **IO pool** — Network I/O
+
+## Configuration
+
+Configuration hierarchy:
+
+1. **`server.conf`** — User-editable configuration file
+2. **Environment variables** — Override file settings
+3. **Defaults** — `DefaultServerConfiguration` provides defaults
+
+**Key configuration classes:**
+- `ServerConfiguration` — Top-level server config
+- `CairoConfiguration` — Storage engine config
+- `HttpServerConfiguration` — HTTP server config
+- `LineTcpReceiverConfiguration` — ILP config
+
+## Testing Architecture
+
+See [Testing Conventions](/development/testing) for details.
+
+**Test organization mirrors production code:**
+```
+core/src/test/java/io/questdb/
+├── cairo/       # Storage tests
+├── griffin/     # SQL tests
+├── cutlass/     # Protocol tests
+└── std/         # Utility tests
+```
+
+## Platform Abstraction
+
+Platform-specific code isolated in:
+
+### Java
+- `io.questdb.std.Os` — OS detection
+- `io.questdb.std.Files` — File operations
+- `io.questdb.std.FilesFacade` — Mockable file operations
+
+### Native C/C++
+```
+core/src/main/c/
+├── linux/      # Linux-specific (epoll, io_uring)
+├── osx/        # macOS-specific (kqueue)
+├── windows/    # Windows-specific (IOCP)
+├── freebsd/    # FreeBSD-specific (kqueue)
+└── share/      # Platform-agnostic
+```
+
+## Related Pages
+
+- [Storage Engine](/development/storage-engine) — Cairo storage internals
+- [SQL Compiler](/development/sql-compiler) — Griffin compiler architecture
+- [SIMD Optimizations](/development/simd-optimization) — Vector operations
+- [Memory Management](/development/memory-management) — Zero-GC design

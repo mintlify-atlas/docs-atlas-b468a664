@@ -1,0 +1,506 @@
+---
+title: Capacity Planning
+description: Hardware requirements, sizing, and performance tuning for QuestDB
+---
+
+## Hardware Requirements
+
+### Minimum Requirements
+
+**Development/Testing**:
+- **CPU**: 2 cores
+- **RAM**: 4 GB
+- **Storage**: 10 GB SSD
+- **OS**: Linux, macOS, Windows (64-bit)
+
+**Production**:
+- **CPU**: 4+ cores
+- **RAM**: 16 GB+
+- **Storage**: 100 GB+ SSD/NVMe
+- **OS**: Linux (recommended), macOS, Windows
+- **Network**: 1 Gbps+
+
+### Recommended Production Configuration
+
+**Small Deployment** (< 1 TB data, < 100K rows/sec):
+- **CPU**: 8 cores (Intel Xeon, AMD EPYC)
+- **RAM**: 32 GB
+- **Storage**: 500 GB NVMe SSD
+- **Network**: 1 Gbps
+
+**Medium Deployment** (1-10 TB data, 100K-1M rows/sec):
+- **CPU**: 16 cores
+- **RAM**: 64-128 GB
+- **Storage**: 2-4 TB NVMe SSD RAID 0/10
+- **Network**: 10 Gbps
+
+**Large Deployment** (> 10 TB data, > 1M rows/sec):
+- **CPU**: 32+ cores
+- **RAM**: 256+ GB
+- **Storage**: 10+ TB NVMe SSD RAID 0/10
+- **Network**: 25+ Gbps
+- **Consider**: Distributed setup, separate ingestion/query nodes
+
+## CPU Sizing
+
+### Thread Pool Configuration
+
+QuestDB uses three shared worker pools:
+
+```properties
+# Network operations (HTTP, PG Wire, ILP)
+shared.network.worker.count=4
+
+# Query execution (parallel queries)
+shared.query.worker.count=8
+
+# WAL apply operations
+shared.write.worker.count=4
+```
+
+**Sizing Guidelines**:
+- **Network pool**: 2-4 threads for typical loads, 8+ for high connection counts
+- **Query pool**: Number of CPU cores for query-heavy workloads
+- **Write pool**: 2-4 threads, increase if WAL apply lags
+
+### CPU Affinity
+
+Pin threads to specific cores to reduce context switching:
+
+```properties
+# Pin network threads to cores 0-3
+shared.network.worker.affinity=0,1,2,3
+
+# Pin query threads to cores 4-11
+shared.query.worker.affinity=4,5,6,7,8,9,10,11
+
+# Pin write threads to cores 12-15
+shared.write.worker.affinity=12,13,14,15
+```
+
+**Best Practices**:
+- Leave some cores unassigned for OS and JVM overhead
+- On NUMA systems, use cores from same socket
+- Avoid hyperthreading for critical threads
+
+## Memory Sizing
+
+### JVM Heap
+
+QuestDB uses off-heap memory for data operations. JVM heap is used for:
+- Query compilation and planning
+- Symbol tables (if `cairo.default.symbol.cache.flag=true`)
+- Network buffers
+- Metadata
+
+**Recommended Heap Sizes**:
+- **Small**: 2-4 GB (`-Xms2g -Xmx4g`)
+- **Medium**: 4-8 GB (`-Xms4g -Xmx8g`)
+- **Large**: 8-16 GB (`-Xms8g -Xmx16g`)
+
+**Never allocate**:
+- More than 50% of system RAM to JVM
+- More than 32 GB (loses compressed OOPs)
+
+### Off-Heap Memory
+
+QuestDB allocates native memory for:
+- Memory-mapped files (data, indexes)
+- Query execution buffers
+- O3 ingestion buffers
+- WAL buffers
+
+**Memory Limit**:
+```properties
+# Limit total RAM usage to 90% of system RAM
+ram.usage.limit.percent=90
+```
+
+**Memory Calculation**:
+```
+Total RAM = JVM Heap + Off-Heap + OS Cache + OS Overhead
+```
+
+Example for 128 GB system:
+- JVM Heap: 8 GB
+- Off-Heap (QuestDB): ~100 GB (90% - heap)
+- OS: ~20 GB
+
+### Page Frame Sizing
+
+**Data Pages**:
+```properties
+# Larger pages = fewer syscalls, more memory per operation
+cairo.writer.data.append.page.size=16M
+
+# For high-cardinality symbol columns
+cairo.writer.data.index.value.append.page.size=16M
+```
+
+**Query Buffers**:
+```properties
+# Adjust based on typical row size
+cairo.sql.page.frame.min.rows=100000
+cairo.sql.page.frame.max.rows=1000000
+```
+
+## Storage Sizing
+
+### Capacity Planning
+
+**Compression Ratio**: QuestDB achieves 3-10x compression depending on data:
+- **High compression** (8-10x): Repeated values, low cardinality
+- **Medium compression** (4-6x): Time series with patterns
+- **Low compression** (2-3x): Random data, high cardinality
+
+**Storage Calculation**:
+```
+Storage = (Row Size × Rows per Day × Retention Days) / Compression Ratio
+```
+
+Example:
+- Row size: 200 bytes
+- Ingestion: 1M rows/day
+- Retention: 365 days
+- Compression: 5x
+
+```
+(200 × 1,000,000 × 365) / 5 = 14.6 GB
+```
+
+Add 30% buffer: **~19 GB**
+
+### Storage Types
+
+**NVMe SSD** (Recommended):
+- Lowest latency (< 100 μs)
+- Highest IOPS (> 500K)
+- Best for hot data
+
+**SATA SSD**:
+- Good latency (< 1 ms)
+- Moderate IOPS (> 50K)
+- Cost-effective for warm data
+
+**HDD**:
+- High latency (> 10 ms)
+- Low IOPS (< 200)
+- Only for cold/archive data with volumes
+
+### RAID Configuration
+
+**RAID 0** (Striping):
+- Pros: Maximum performance, double throughput
+- Cons: No redundancy, double failure risk
+- Use: Development, with external backups
+
+**RAID 1** (Mirroring):
+- Pros: Redundancy, same read performance
+- Cons: 50% capacity loss, same write performance
+- Use: Small deployments
+
+**RAID 10** (Stripe + Mirror):
+- Pros: Performance + redundancy
+- Cons: 50% capacity loss
+- Use: Production systems
+
+**No RAID**:
+- Use QuestDB volumes for tiering
+- Rely on external backups and snapshots
+- Simpler configuration
+
+### Volume Configuration
+
+```properties
+# Tier hot data on NVMe, cold on HDD
+cairo.volumes=hot->/mnt/nvme,cold->/mnt/hdd
+```
+
+```sql
+-- Place high-traffic tables on fast storage
+CREATE TABLE trades (...) IN VOLUME 'hot';
+
+-- Archive tables on slow storage
+CREATE TABLE trades_archive (...) IN VOLUME 'cold';
+```
+
+## Network Sizing
+
+### Bandwidth Requirements
+
+**Ingestion Bandwidth**:
+```
+Bandwidth (Mbps) = Row Size (bytes) × Rows/sec × 8 / 1,000,000
+```
+
+Example: 200 byte rows at 100K rows/sec:
+```
+200 × 100,000 × 8 / 1,000,000 = 160 Mbps
+```
+
+**Query Bandwidth**: Depends on result set size and query frequency.
+
+### Connection Limits
+
+```properties
+# HTTP connections
+http.net.connection.limit=256
+
+# PostgreSQL connections
+pg.net.connection.limit=64
+
+# ILP TCP connections
+line.tcp.net.connection.limit=256
+```
+
+**Sizing**:
+- Monitor `questdb_connections_active` metric
+- Set limits 2x peak concurrent connections
+- Each connection uses ~1 MB memory
+
+## Performance Tuning
+
+### Write Performance
+
+**Optimize O3 Configuration**:
+```properties
+# Increase lag for bursty out-of-order data
+cairo.o3.max.lag=600000  # 10 minutes
+
+# Increase uncommitted rows for bulk loads
+cairo.max.uncommitted.rows=1000000
+
+# Larger O3 memory per column
+cairo.o3.column.memory.size=16M
+```
+
+**Commit Mode**:
+```properties
+# Use nosync for maximum throughput
+cairo.commit.mode=nosync
+
+# Reduce commit latency for lower lag
+cairo.commit.latency=10s
+```
+
+**WAL Tuning**:
+```properties
+# Larger WAL pages for high-throughput
+cairo.wal.writer.data.append.page.size=4M
+
+# Adjust segment rollover for replication
+cairo.wal.segment.rollover.row.count=500000
+```
+
+### Read Performance
+
+**Parallel Execution**:
+```properties
+# Enable all parallel execution features
+cairo.sql.parallel.filter.enabled=true
+cairo.sql.parallel.groupby.enabled=true
+cairo.sql.parallel.topk.enabled=true
+
+# Increase query workers for read-heavy loads
+shared.query.worker.count=16
+```
+
+**JIT Compilation**:
+```properties
+# Enable vectorized JIT for filters
+cairo.sql.jit.mode=on
+```
+
+**Query Cache**:
+```properties
+# Enable and size query cache
+http.query.cache.enabled=true
+http.query.cache.block.count=16
+http.query.cache.row.count=4
+
+pg.select.cache.enabled=true
+pg.select.cache.block.count=16
+pg.select.cache.row.count=4
+```
+
+**Indexing**:
+```properties
+# Enable parallel indexing
+cairo.parallel.indexing.enabled=true
+cairo.parallel.index.threshold=100000
+```
+
+### Memory Optimization
+
+**Symbol Tables**:
+```properties
+# Enable auto-scaling for variable cardinality
+cairo.auto.scale.symbol.capacity=true
+
+# Avoid caching symbols on heap (use off-heap)
+cairo.default.symbol.cache.flag=false
+```
+
+**Page Frames**:
+```properties
+# Adjust for typical result set sizes
+cairo.sql.page.frame.min.rows=50000
+cairo.sql.page.frame.max.rows=500000
+```
+
+**Hash Maps**:
+```properties
+# Increase for large GROUP BY operations
+cairo.sql.map.key.capacity=4194304
+cairo.sql.map.page.size=8m
+```
+
+## Monitoring and Benchmarking
+
+### Key Metrics to Monitor
+
+1. **Write Throughput**: Rows/sec ingested
+2. **Query Latency**: p50, p95, p99 response times
+3. **Memory Usage**: JVM heap and off-heap
+4. **Disk IOPS**: Read and write operations
+5. **Network Throughput**: Ingress and egress
+6. **Connection Count**: Active connections
+7. **WAL Lag**: Time between write and apply
+
+### Benchmarking
+
+**Write Benchmark**:
+```bash
+# Use ILP to test ingestion rate
+for i in {1..1000000}; do
+  echo "trades,symbol=BTC price=50000,volume=1.5 $(date +%s%N)"
+done | nc localhost 9009
+```
+
+**Query Benchmark**:
+```sql
+-- Measure query performance
+SELECT count(*), avg(price)
+FROM trades
+WHERE timestamp > dateadd('d', -1, now());
+```
+
+**Monitor Metrics**:
+```bash
+# Enable metrics
+metrics.enabled=true
+
+# Query metrics endpoint
+curl http://localhost:9000/metrics
+```
+
+## Scaling Strategies
+
+### Vertical Scaling (Scale Up)
+
+1. Add more CPU cores → increase worker counts
+2. Add more RAM → increase buffer sizes
+3. Upgrade to faster storage → reduce latency
+4. Increase network bandwidth → support more clients
+
+### Horizontal Scaling (Scale Out)
+
+**Read Replicas**:
+- Use WAL replication
+- Route queries to replicas
+- Primary for writes, replicas for reads
+
+**Partitioning**:
+- Partition by time (automatic)
+- Use volumes for data tiering
+- Archive old partitions
+
+**Sharding**:
+- Split tables across multiple instances
+- Application-level routing
+- Aggregate results at application layer
+
+## Cost Optimization
+
+1. **Right-size worker pools**: Don't over-allocate threads
+2. **Use storage tiers**: Hot on NVMe, warm on SSD, cold on HDD
+3. **Enable compression**: Parquet format for exports
+4. **Partition pruning**: Drop old partitions to reclaim space
+5. **Symbol optimization**: Auto-scale instead of over-provisioning
+6. **Query cache**: Reduce redundant computation
+7. **Batch writes**: Use ILP or COPY instead of single INSERTs
+
+## Cloud Deployments
+
+### AWS
+
+**Instance Types**:
+- **i3/i3en**: NVMe instance storage, lowest latency
+- **r6i/r6a**: High memory for large datasets
+- **c6i/c6a**: Compute-optimized for query-heavy
+
+**Storage**:
+- **io2 Block Express**: Highest performance
+- **gp3**: Balanced performance/cost
+- **EFS**: Not recommended (high latency)
+
+### Azure
+
+**VM Series**:
+- **Lsv2**: NVMe local storage
+- **Easv5**: Memory-optimized
+- **Fsv2**: Compute-optimized
+
+**Storage**:
+- **Premium SSD v2**: Adjustable IOPS/throughput
+- **Ultra Disk**: Lowest latency
+
+### GCP
+
+**Machine Types**:
+- **n2-highmem**: Memory-optimized
+- **n2-standard**: Balanced
+- **Local SSD**: Lowest latency
+
+**Storage**:
+- **Hyperdisk Extreme**: Highest performance
+- **SSD Persistent Disk**: Balanced
+
+## Example Configurations
+
+### High Throughput Ingestion
+
+```properties
+shared.write.worker.count=8
+cairo.max.uncommitted.rows=2000000
+cairo.o3.max.lag=300000
+cairo.o3.column.memory.size=32M
+cairo.commit.mode=nosync
+cairo.wal.writer.data.append.page.size=4M
+line.tcp.net.connection.limit=512
+```
+
+### Low Latency Queries
+
+```properties
+shared.query.worker.count=16
+cairo.sql.parallel.filter.enabled=true
+cairo.sql.parallel.groupby.enabled=true
+cairo.sql.jit.mode=on
+http.query.cache.enabled=true
+http.query.cache.block.count=32
+http.query.cache.row.count=8
+```
+
+### Balanced Production
+
+```properties
+shared.worker.count=8
+ram.usage.limit.percent=85
+cairo.commit.mode=async
+cairo.wal.enabled.default=true
+cairo.auto.scale.symbol.capacity=true
+http.net.connection.limit=256
+pg.net.connection.limit=64
+metrics.enabled=true
+```

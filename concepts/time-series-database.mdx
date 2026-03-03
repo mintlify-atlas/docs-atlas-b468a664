@@ -1,0 +1,167 @@
+---
+title: Time-Series Database
+description: Understanding QuestDB as a time-series database and its core design principles
+---
+
+## What is a Time-Series Database?
+
+A time-series database is optimized for storing and querying data that changes over time. Unlike traditional relational databases, time-series databases are purpose-built to handle:
+
+- High ingestion rates (millions of rows per second)
+- Time-ordered data with timestamps
+- Analytical queries over large time ranges
+- Time-based aggregations and windowing
+
+## Why QuestDB?
+
+QuestDB combines the performance characteristics of specialized time-series databases with the familiar SQL interface that developers already know. It's designed for applications that generate continuous streams of data:
+
+- IoT sensor networks
+- Financial market data
+- Application metrics and observability
+- Network monitoring
+- Industrial telemetry
+
+## Core Design Principles
+
+### Zero-GC Architecture
+
+QuestDB's Java implementation uses off-heap memory management to avoid garbage collection pauses on data paths. The storage engine operates directly on memory-mapped files with zero allocation during query execution or data ingestion.
+
+```java
+// From TableWriter.java:191
+final ObjList<MemoryMA> columns;
+```
+
+Columns are managed as memory-mapped appendable regions (source:core/src/main/java/io/questdb/cairo/TableWriter.java:191), allowing direct manipulation without heap allocations.
+
+### Column-Oriented Storage
+
+Data is stored by column rather than by row, enabling:
+
+- **Better compression**: Similar values compress more efficiently
+- **SIMD operations**: Vectorized processing of columnar data via native code
+- **Efficient column scans**: Read only the columns needed for a query
+- **Cache locality**: Sequential memory access patterns
+
+The `TableReader` class manages column-oriented reads:
+
+```java
+// From TableReader.java:90-94
+private ObjList<MemoryCMR> columns;
+private ObjList<PartitionDecoder> parquetPartitionDecoders;
+private ObjList<MemoryCMR> parquetPartitions;
+```
+
+Each column is stored in separate memory-mapped files, allowing independent access (source:core/src/main/java/io/questdb/cairo/TableReader.java:90-94).
+
+### Native Performance
+
+Critical operations use C/C++ implementations with SIMD acceleration:
+
+- Vector math operations
+- String matching and comparison
+- Compression/decompression
+- Memory management
+
+This hybrid approach combines Java's productivity with native code performance where it matters most.
+
+### Time-Based Partitioning
+
+Tables are automatically partitioned by time intervals (HOUR, DAY, WEEK, MONTH, YEAR), enabling:
+
+- Efficient time-range queries
+- Parallel query execution across partitions
+- Data lifecycle management (TTL)
+- Reduced I/O for bounded queries
+
+See [Partitioning](/concepts/partitioning) for implementation details.
+
+## Performance Characteristics
+
+### Write Performance
+
+QuestDB achieves high write throughput through:
+
+1. **Append-only writes**: Data is always appended to the end of column files
+2. **Batch commits**: Multiple rows are committed in a single transaction
+3. **WAL (Write-Ahead Log)**: Decouples ingestion from table updates for concurrent writes
+4. **O3 (Out-of-Order) support**: Handles late-arriving data efficiently
+
+### Read Performance
+
+Queries execute efficiently via:
+
+1. **Time-based partition pruning**: Skip partitions outside the query range
+2. **Columnar scans**: Read only required columns
+3. **Parallel execution**: Multi-threaded query processing
+4. **JIT compilation**: Just-in-time compilation of filter expressions
+5. **SIMD operations**: Vectorized aggregations
+
+## SQL Extensions for Time-Series
+
+QuestDB extends standard SQL with time-series specific features:
+
+- **SAMPLE BY**: Time-based aggregations (downsampling)
+- **ASOF JOIN**: Join tables by nearest timestamp match
+- **LATEST ON**: Deduplicate by timestamp to get latest values
+- **WINDOW JOIN**: Range-based joins with time windows
+- **HORIZON JOIN**: Aggregate over future time ranges with ASOF lookups
+
+See [SQL Extensions](/concepts/sql-extensions) for detailed syntax and examples.
+
+## Comparison with Traditional Databases
+
+| Feature | Traditional RDBMS | QuestDB |
+|---------|------------------|----------|
+| Storage model | Row-oriented | Column-oriented |
+| Write pattern | Random updates | Append-only |
+| Query optimization | General purpose | Time-series focused |
+| Partitioning | Manual | Automatic by time |
+| Time operations | Limited | Native support |
+| Ingestion rate | Thousands/sec | Millions/sec |
+
+## Use Cases
+
+### High-Frequency Trading
+
+```sql
+-- Get OHLC bars with SAMPLE BY
+SELECT 
+    timestamp,
+    first(price) as open,
+    max(price) as high,
+    min(price) as low,
+    last(price) as close,
+    sum(volume) as volume
+FROM trades
+WHERE symbol = 'AAPL'
+SAMPLE BY 5m
+ALIGN TO CALENDAR;
+```
+
+### IoT Sensor Data
+
+```sql
+-- Get latest reading per sensor using LATEST ON
+SELECT * FROM sensors
+LATEST ON timestamp PARTITION BY sensor_id;
+```
+
+### Application Monitoring
+
+```sql
+-- Calculate moving averages with WINDOW JOIN
+SELECT 
+    timestamp,
+    metric_value,
+    avg(metric_value) OVER (ORDER BY timestamp RANGE BETWEEN 1h PRECEDING AND CURRENT ROW) as avg_1h
+FROM metrics
+WHERE metric_name = 'cpu_usage';
+```
+
+## Next Steps
+
+- Learn about [Storage Model](/concepts/storage-model) for internal architecture details
+- Explore [SQL Extensions](/concepts/sql-extensions) for time-series query capabilities
+- Understand [WAL Architecture](/concepts/wal) for concurrent write handling

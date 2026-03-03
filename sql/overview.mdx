@@ -1,0 +1,156 @@
+---
+title: SQL Overview
+description: QuestDB SQL capabilities, PostgreSQL compatibility, and time-series extensions.
+---
+
+QuestDB implements a SQL dialect designed specifically for time-series data analysis. It combines standard SQL features with specialized extensions for high-performance time-series operations.
+
+## SQL Capabilities
+
+QuestDB's SQL engine supports:
+
+- **SELECT queries** with filtering, aggregation, and ordering
+- **JOIN operations** including specialized time-series joins
+- **Time-series functions** for sampling, windowing, and temporal analysis
+- **Aggregation functions** with optimizations for columnar storage
+- **Window functions** for analytical queries
+- **CREATE, ALTER, DROP** statements for schema management
+- **INSERT** operations for data ingestion
+
+## PostgreSQL Compatibility
+
+QuestDB is compatible with the PostgreSQL wire protocol, allowing you to connect using standard PostgreSQL clients and drivers. However, QuestDB implements its own SQL dialect with differences:
+
+### Supported Features
+
+- Most standard SQL syntax (SELECT, WHERE, GROUP BY, ORDER BY, LIMIT)
+- PostgreSQL wire protocol (use any PostgreSQL client)
+- Common data types (INT, LONG, DOUBLE, STRING, SYMBOL, TIMESTAMP)
+- Standard aggregate functions (SUM, AVG, COUNT, MIN, MAX)
+- Standard JOIN types (INNER, LEFT, CROSS)
+
+### Key Differences
+
+- **No DELETE**: QuestDB does not support DELETE operations. Use `ALTER TABLE DROP PARTITION` for bulk deletion or implement soft deletes with application logic
+- **No UPDATE**: Use INSERT to add new records with updated values
+- **Cast syntax**: QuestDB uses `expr::TYPE` syntax (e.g., `x::DOUBLE`) instead of `CAST(expr AS TYPE)`
+- **Underscore separators**: Numbers support underscores for readability: `1_000_000`
+- **Array types**: Multidimensional arrays with type-encoded dimensionality: `DOUBLE[]`, `DOUBLE[][]`
+
+## Time-Series Extensions
+
+QuestDB extends SQL with specialized time-series operations:
+
+### SAMPLE BY
+
+Aggregate time-series data into time buckets:
+
+```sql
+SELECT timestamp, avg(price), sum(volume)
+FROM trades
+SAMPLE BY 1h;
+```
+
+### LATEST ON
+
+Retrieve the most recent record for each partition:
+
+```sql
+SELECT symbol, price, timestamp
+FROM prices
+LATEST ON timestamp PARTITION BY symbol;
+```
+
+### ASOF JOIN
+
+Join tables based on temporal proximity:
+
+```sql
+SELECT t.symbol, t.quantity, p.price
+FROM trades t
+ASOF JOIN prices p ON (t.symbol = p.symbol);
+```
+
+### WINDOW JOIN
+
+Aggregate data within time windows:
+
+```sql
+SELECT t.timestamp, t.price, avg(p.price) AS avg_window_price
+FROM trades t
+WINDOW JOIN prices p ON (t.symbol = p.symbol)
+RANGE BETWEEN 5 MINUTE PRECEDING AND 5 MINUTE FOLLOWING;
+```
+
+### HORIZON JOIN
+
+Aggregate data across multiple time offsets:
+
+```sql
+SELECT t.symbol, h.offset, avg(p.price)
+FROM trades t
+HORIZON JOIN prices p ON (t.symbol = p.symbol)
+RANGE FROM -10s TO 10s STEP 1s AS h;
+```
+
+## Data Types
+
+QuestDB supports these data types:
+
+| Type | Description |
+|------|-------------|
+| `BOOLEAN` | True/false values |
+| `BYTE` | 8-bit signed integer |
+| `SHORT` | 16-bit signed integer |
+| `INT` | 32-bit signed integer |
+| `LONG` | 64-bit signed integer |
+| `FLOAT` | 32-bit floating point |
+| `DOUBLE` | 64-bit floating point |
+| `STRING` | Variable-length text |
+| `SYMBOL` | Indexed string (optimized for repeated values) |
+| `CHAR` | Single character |
+| `DATE` | Date value (millisecond precision) |
+| `TIMESTAMP` | Microsecond timestamp |
+| `TIMESTAMP_NS` | Nanosecond timestamp |
+| `UUID` | Universally unique identifier |
+| `IPv4` | IPv4 address |
+| `LONG256` | 256-bit integer |
+| `GEOHASH` | Geospatial hash |
+| `BINARY` | Binary data |
+
+## Type Casting
+
+QuestDB uses the `::TYPE` syntax for type casting:
+
+```sql
+-- Cast to different types
+SELECT x::DOUBLE FROM numbers;
+SELECT '2023-01-01'::TIMESTAMP FROM data;
+SELECT 'ABC'::SYMBOL FROM strings;
+```
+
+## NULL Handling
+
+QuestDB distinguishes between NULL as a sentinel value and actual NULL values:
+
+- All aggregate functions handle NULL values appropriately
+- Use `IS NULL` and `IS NOT NULL` for NULL checks
+- Functions like `first_not_null()` and `last_not_null()` skip NULL values
+
+## Query Execution
+
+QuestDB executes queries using:
+
+- **Columnar storage** for efficient data access
+- **SIMD acceleration** for vectorized operations
+- **JIT compilation** for filter expressions
+- **Parallel execution** for aggregations and joins
+- **Zero-GC design** to avoid allocation overhead
+
+## Next Steps
+
+- [SELECT Queries](/sql/select) - Learn about SELECT statement syntax
+- [JOIN Operations](/sql/joins) - Explore JOIN types and time-series joins
+- [Time-Series Functions](/sql/time-series-functions) - Master SAMPLE BY and LATEST ON
+- [Aggregations](/sql/aggregations) - Use aggregate functions
+- [Window Functions](/sql/window-functions) - Perform analytical calculations

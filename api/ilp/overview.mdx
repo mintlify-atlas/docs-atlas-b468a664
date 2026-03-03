@@ -1,0 +1,217 @@
+---
+title: InfluxDB Line Protocol Overview
+sidebarTitle: Overview
+description: Introduction to QuestDB's InfluxDB Line Protocol implementation for high-performance time-series data ingestion
+---
+
+QuestDB implements the InfluxDB Line Protocol (ILP) for high-throughput ingestion of time-series data. ILP is a text-based format that combines measurement name, tags, fields, and timestamp in a single line.
+
+## Protocol Format
+
+The InfluxDB Line Protocol follows this structure:
+
+```
+table_name,tag1=value1,tag2=value2 field1=value1,field2=value2 timestamp
+```
+
+### Components
+
+<ParamField path="table_name" type="string" required>
+  The name of the table (measurement) where data will be written. If the table does not exist and auto-create is enabled, QuestDB creates it automatically.
+</ParamField>
+
+<ParamField path="tags" type="key=value pairs">
+  Optional metadata stored as SYMBOL columns. Tags are indexed and optimized for filtering. Multiple tags are comma-separated with no spaces.
+</ParamField>
+
+<ParamField path="fields" type="key=value pairs" required>
+  Data values stored in the table. At least one field is required. Multiple fields are comma-separated. Fields are separated from tags by a space character.
+</ParamField>
+
+<ParamField path="timestamp" type="integer">
+  Optional timestamp value. If omitted, QuestDB uses the server time. The timestamp unit is specified by a suffix or server configuration.
+</ParamField>
+
+## Data Types
+
+QuestDB supports the following field value types:
+
+<ResponseField name="Float" type="DOUBLE">
+  Numeric value without suffix (e.g., `42.5`, `3.14`). Stored as DOUBLE by default.
+  
+  ```
+  sensors,location=london temperature=23.5,humidity=65.2
+  ```
+</ResponseField>
+
+<ResponseField name="Integer" type="LONG">
+  Numeric value with `i` suffix (e.g., `42i`, `1000i`). Stored as LONG by default.
+  
+  ```
+  metrics,host=server1 cpu_count=8i,memory_mb=16384i
+  ```
+</ResponseField>
+
+<ResponseField name="String" type="STRING">
+  Quoted text value (e.g., `"hello world"`, `"status: OK"`).
+  
+  ```
+  logs,app=frontend message="User logged in",level="INFO"
+  ```
+</ResponseField>
+
+<ResponseField name="Boolean" type="BOOLEAN">
+  Boolean value: `t`, `T`, `true`, `True`, `TRUE` for true; `f`, `F`, `false`, `False`, `FALSE` for false.
+  
+  ```
+  alerts,service=api is_critical=true,resolved=false
+  ```
+</ResponseField>
+
+<ResponseField name="Decimal" type="DECIMAL">
+  High-precision numeric value with `d` suffix (e.g., `123.456789d`). Stored as DECIMAL256.
+  
+  ```
+  trades,symbol=BTCUSD price=50123.456789d,quantity=0.5d
+  ```
+</ResponseField>
+
+<ResponseField name="Timestamp" type="TIMESTAMP">
+  Integer with timestamp unit suffix: `n` (nanos), `t` (micros), `m` (millis).
+  
+  ```
+  events,type=click occurred_at=1609459200000000t
+  ```
+</ResponseField>
+
+<ResponseField name="Long256" type="LONG256">
+  Hexadecimal value with `0x` prefix and `i` suffix (e.g., `0x1234567890abcdefi`).
+  
+  ```
+  blockchain,network=eth tx_hash=0xabcdef1234567890i
+  ```
+</ResponseField>
+
+## Timestamp Precision
+
+QuestDB supports multiple timestamp units:
+
+| Suffix | Unit | Example | Description |
+|--------|------|---------|-------------|
+| `n` | Nanoseconds | `1609459200000000000n` | Highest precision |
+| `t` | Microseconds | `1609459200000000t` | Default for ILP/TCP |
+| `m` | Milliseconds | `1609459200000m` | Common for web APIs |
+| (none) | Nanoseconds | `1609459200000000000` | Server default |
+
+### Examples
+
+```
+# Nanosecond precision (explicit)
+sensors,city=London temperature=23.5 1609459200000000000n
+
+# Microsecond precision
+sensors,city=Paris temperature=18.2 1609459200000000t
+
+# Millisecond precision
+sensors,city=Berlin temperature=15.7 1609459200000m
+
+# Server timestamp (no timestamp specified)
+sensors,city=Madrid temperature=28.3
+```
+
+## Escaping Special Characters
+
+Special characters must be escaped with a backslash (`\`):
+
+- In **table names** and **tag keys/values**: Escape commas (`,`), equals (`=`), and spaces (` `)
+- In **field keys**: Escape commas (`,`), equals (`=`), and spaces (` `)
+- In **field string values**: Use double quotes and escape internal quotes with backslash
+
+### Examples
+
+```
+# Escaped table name with space
+my\ table,tag1=value temperature=23.5
+
+# Escaped tag value with comma
+sensors,location=London\,UK temperature=23.5
+
+# Escaped field string with quotes
+logs,app=web message="User said \"hello\""
+```
+
+## Complete Examples
+
+### Basic Measurement
+
+```
+sensors,location=london,sensor_id=sensor_001 temperature=23.5,humidity=65.2 1609459200000000000
+```
+
+This creates/writes to a table named `sensors` with:
+- Tags: `location` (london), `sensor_id` (sensor_001)
+- Fields: `temperature` (23.5), `humidity` (65.2)
+- Timestamp: 1609459200000000000 nanoseconds
+
+### Multiple Data Types
+
+```
+metrics,host=server1,region=us-east cpu_usage=45.2,memory_gb=16i,status="OK",is_healthy=true 1609459200000000t
+```
+
+### Batch Ingestion
+
+```
+sensors,location=london temperature=23.5 1609459200000000000
+sensors,location=paris temperature=18.2 1609459201000000000
+sensors,location=berlin temperature=15.7 1609459202000000000
+sensors,location=madrid temperature=28.3 1609459203000000000
+```
+
+## Ingestion Methods
+
+QuestDB supports ILP ingestion over:
+
+- **[TCP](/api/ilp/tcp)** - Recommended for production use. Supports authentication, high throughput, and connection pooling. Default port: 9009
+- **[UDP](/api/ilp/udp)** - Fire-and-forget ingestion with no acknowledgment. Lower overhead but no delivery guarantees. Default port: 4567
+
+## Best Practices
+
+<Note>
+  Use TCP for production workloads where data delivery is critical. TCP provides authentication, error handling, and connection management.
+</Note>
+
+<Tip>
+  Group measurements by table and send in batches for optimal throughput. QuestDB efficiently handles batch commits.
+</Tip>
+
+<Warning>
+  Tag values are deduplicated and stored as SYMBOL columns. Use tags for metadata with bounded cardinality (e.g., sensor IDs, locations, device types). Avoid using unbounded values like timestamps or UUIDs as tags.
+</Warning>
+
+## Performance Considerations
+
+1. **Batch writes** - Send multiple lines per connection for better throughput
+2. **Timestamp ordering** - Send data in timestamp order when possible to optimize partition writes
+3. **Column types** - QuestDB infers column types from the first value. Explicit type suffixes prevent type mismatches
+4. **Tag cardinality** - Keep tag value cardinality reasonable (thousands, not millions) for optimal performance
+5. **Connection pooling** - Reuse TCP connections across multiple writes to reduce connection overhead
+
+## Configuration
+
+ILP behavior is controlled by server configuration properties:
+
+- **Auto-create tables** - Automatically create tables from ILP messages (default: enabled)
+- **Auto-create columns** - Automatically add new columns to existing tables (default: enabled)
+- **Default partition** - Default partitioning strategy for new tables (default: DAY)
+- **Timestamp unit** - Default timestamp unit when no suffix is provided (default: nanoseconds)
+- **Commit interval** - How frequently to commit data to disk (default: 2000ms)
+
+See the [TCP configuration](/api/ilp/tcp#configuration) and [UDP configuration](/api/ilp/udp#configuration) pages for detailed settings.
+
+## Related Resources
+
+- [ILP/TCP Ingestion](/api/ilp/tcp)
+- [ILP/UDP Ingestion](/api/ilp/udp)
+- [ILP Authentication](/api/ilp/authentication)
+- [Client Libraries](/clients)

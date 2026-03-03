@@ -1,0 +1,316 @@
+---
+title: C/C++ client
+description: QuestDB C/C++ client for systems programming and embedded applications
+---
+
+The QuestDB C/C++ client provides a low-level API for ingesting data using the InfluxDB Line Protocol.
+
+## Installation
+
+Clone the repository and build:
+
+```bash
+git clone https://github.com/questdb/c-questdb-client.git
+cd c-questdb-client
+mkdir build && cd build
+cmake ..
+make
+sudo make install
+```
+
+## C API
+
+### Quick start
+
+```c
+#include <questdb/ingress/line_sender.h>
+#include <stdio.h>
+
+int main() {
+    line_sender_error* err = NULL;
+    line_sender* sender = line_sender_from_conf(
+        "http::addr=localhost:9000;",
+        &err);
+    
+    if (!sender) {
+        fprintf(stderr, "Failed to create sender: %s\n",
+                line_sender_error_msg(err));
+        line_sender_error_free(err);
+        return 1;
+    }
+    
+    line_sender_buffer* buffer = line_sender_buffer_new();
+    
+    line_sender_buffer_table(buffer, "trades", 6);
+    line_sender_buffer_symbol(buffer, "symbol", 6, "ETH-USD", 7);
+    line_sender_buffer_symbol(buffer, "side", 4, "sell", 4);
+    line_sender_buffer_column_f64(buffer, "price", 5, 2615.54);
+    line_sender_buffer_column_f64(buffer, "amount", 6, 0.00044);
+    line_sender_buffer_at_now(buffer);
+    
+    if (!line_sender_flush(sender, buffer, &err)) {
+        fprintf(stderr, "Failed to flush: %s\n",
+                line_sender_error_msg(err));
+        line_sender_error_free(err);
+    }
+    
+    line_sender_buffer_free(buffer);
+    line_sender_close(sender);
+    
+    return 0;
+}
+```
+
+### Build and link
+
+```bash
+gcc -o example example.c -lquestdb_client
+./example
+```
+
+## C++ API
+
+### Quick start
+
+```cpp
+#include <questdb/ingress/line_sender.hpp>
+#include <iostream>
+
+using namespace questdb::ingress;
+
+int main() {
+    try {
+        auto sender = line_sender::from_conf(
+            "http::addr=localhost:9000;");
+        
+        sender.table("trades")
+            .symbol("symbol", "ETH-USD")
+            .symbol("side", "sell")
+            .column("price", 2615.54)
+            .column("amount", 0.00044)
+            .at_now();
+        
+        sender.flush();
+    } catch (const line_sender_error& e) {
+        std::cerr << "Error: " << e.what() << std::endl;
+        return 1;
+    }
+    
+    return 0;
+}
+```
+
+### Build and link
+
+```bash
+g++ -std=c++17 -o example example.cpp -lquestdb_client
+./example
+```
+
+## Configuration
+
+### C
+
+```c
+line_sender* sender = line_sender_from_conf(
+    "http::addr=localhost:9000;username=admin;password=quest;",
+    &err);
+```
+
+### C++
+
+```cpp
+auto sender = line_sender::from_conf(
+    "http::addr=localhost:9000;username=admin;password=quest;");
+```
+
+### Configuration options
+
+<ParamField path="protocol" type="string">
+  `http` or `tcp`
+</ParamField>
+
+<ParamField path="addr" type="string" required>
+  Server address (host:port)
+</ParamField>
+
+<ParamField path="username" type="string">
+  Authentication username
+</ParamField>
+
+<ParamField path="password" type="string">
+  Authentication password (HTTP)
+</ParamField>
+
+<ParamField path="token" type="string">
+  Authentication token (TCP)
+</ParamField>
+
+## Data types
+
+### C
+
+```c
+line_sender_buffer_table(buffer, "sensors", 7);
+line_sender_buffer_symbol(buffer, "location", 8, "warehouse-1", 11);
+line_sender_buffer_column_i64(buffer, "sensor_id", 9, 12345);
+line_sender_buffer_column_f64(buffer, "temperature", 11, 23.5);
+line_sender_buffer_column_str(buffer, "status", 6, "active", 6);
+line_sender_buffer_column_bool(buffer, "is_online", 9, true);
+line_sender_buffer_at_now(buffer);
+```
+
+### C++
+
+```cpp
+sender.table("sensors")
+    .symbol("location", "warehouse-1")
+    .column("sensor_id", 12345)
+    .column("temperature", 23.5)
+    .column("status", "active")
+    .column("is_online", true)
+    .at_now();
+```
+
+## Batching (C++)
+
+```cpp
+auto sender = line_sender::from_conf("http::addr=localhost:9000;");
+
+// Send 1000 rows
+for (int i = 0; i < 1000; i++) {
+    sender.table("metrics")
+        .symbol("host", "server-" + std::to_string(i % 10))
+        .column("cpu", static_cast<double>(i % 100))
+        .column("memory", static_cast<double>((i * 2) % 100))
+        .at_now();
+}
+
+sender.flush();
+```
+
+## Error handling
+
+### C
+
+```c
+line_sender_error* err = NULL;
+
+if (!line_sender_flush(sender, buffer, &err)) {
+    fprintf(stderr, "Error: %s\n", line_sender_error_msg(err));
+    fprintf(stderr, "Error code: %d\n", line_sender_error_code(err));
+    line_sender_error_free(err);
+    return 1;
+}
+```
+
+### C++
+
+```cpp
+try {
+    sender.table("trades")
+        .symbol("symbol", "BTC-USD")
+        .column("price", 50000.0)
+        .at_now();
+    
+    sender.flush();
+} catch (const line_sender_error& e) {
+    std::cerr << "Error: " << e.what() << std::endl;
+    std::cerr << "Error code: " << e.code() << std::endl;
+}
+```
+
+## Memory management
+
+### C
+
+<Warning>
+Always free resources to avoid memory leaks.
+</Warning>
+
+```c
+line_sender_buffer* buffer = line_sender_buffer_new();
+// Use buffer...
+line_sender_buffer_free(buffer);
+
+line_sender* sender = line_sender_from_conf(conf, &err);
+// Use sender...
+line_sender_close(sender);
+
+if (err) {
+    line_sender_error_free(err);
+}
+```
+
+### C++
+
+```cpp
+// RAII handles cleanup automatically
+{
+    auto sender = line_sender::from_conf("http::addr=localhost:9000;");
+    // Use sender...
+}  // sender is closed automatically
+```
+
+## Thread safety
+
+<Warning>
+The sender is **not** thread-safe. Use one sender per thread or add synchronization.
+</Warning>
+
+### C++
+
+```cpp
+#include <thread>
+#include <vector>
+
+void worker(int id) {
+    auto sender = line_sender::from_conf("http::addr=localhost:9000;");
+    
+    for (int i = 0; i < 100; i++) {
+        sender.table("worker_metrics")
+            .symbol("worker_id", "worker-" + std::to_string(id))
+            .column("iteration", i)
+            .at_now();
+    }
+    
+    sender.flush();
+}
+
+int main() {
+    std::vector<std::thread> threads;
+    
+    // Launch 10 workers, each with its own sender
+    for (int i = 0; i < 10; i++) {
+        threads.emplace_back(worker, i);
+    }
+    
+    for (auto& t : threads) {
+        t.join();
+    }
+    
+    return 0;
+}
+```
+
+## Performance tips
+
+<Tip>
+Batch multiple rows before calling flush for optimal throughput.
+</Tip>
+
+1. **Batch writes**: Send 100-1000 rows per flush
+2. **Reuse buffers**: Clear and reuse instead of creating new ones (C)
+3. **Use HTTP**: Better performance for most use cases
+4. **One sender per thread**: Avoid synchronization overhead
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="ILP Reference" icon="book" href="/api/ilp/overview">
+    Learn about the protocol
+  </Card>
+  <Card title="GitHub" icon="github" href="https://github.com/questdb/c-questdb-client">
+    View source code
+  </Card>
+</CardGroup>

@@ -1,0 +1,604 @@
+---
+title: Security
+description: Authentication, authorization, TLS encryption, and access control
+---
+
+## Overview
+
+QuestDB provides multiple security layers:
+
+1. **HTTP Basic Authentication**: Simple username/password authentication
+2. **TLS/SSL Encryption**: Encrypted connections for all protocols
+3. **Access Control Lists (ACL)**: Fine-grained permissions (Enterprise)
+4. **Read-Only Mode**: Prevent data modification
+5. **Network Binding**: Restrict listening interfaces
+
+## Authentication
+
+### HTTP Basic Authentication
+
+Protect the HTTP API and Web Console:
+
+```properties
+# server.conf
+
+# Enable authentication
+http.user=admin
+http.password=quest
+```
+
+**Access with authentication**:
+```bash
+# Web Console
+curl -u admin:quest http://localhost:9000/
+
+# REST API
+curl -u admin:quest -G http://localhost:9000/exec \
+  --data-urlencode "query=SELECT * FROM trades"
+```
+
+**Disable authentication**:
+Comment out or remove the `http.user` and `http.password` lines.
+
+### PostgreSQL Authentication
+
+Authenticate PostgreSQL wire protocol connections:
+
+```properties
+# server.conf
+
+# Admin user (full access)
+pg.user=admin
+pg.password=quest
+
+# Read-only user
+pg.readonly.user.enabled=true
+pg.readonly.user=viewer
+pg.readonly.password=readonly_pass
+```
+
+**Connect with authentication**:
+```bash
+# psql
+psql -h localhost -p 8812 -U admin -d qdb
+
+# Connection string
+postgresql://admin:quest@localhost:8812/qdb
+```
+
+**Read-only user behavior**:
+- All `SELECT` queries allowed
+- `INSERT`, `UPDATE`, `DELETE`, `CREATE`, `ALTER`, `DROP` rejected
+
+### ILP TCP Authentication
+
+Authenticate InfluxDB Line Protocol connections:
+
+```properties
+# server.conf
+
+# Authentication database file
+line.tcp.auth.db.path=conf/auth.txt
+```
+
+**auth.txt format**:
+```
+# Format: username challenge_public_key user_private_key
+alice Bpz3... uy2B...
+bob xY7x... 3kKl...
+```
+
+Generate key pairs:
+```bash
+# Using QuestDB utility (if available)
+java -cp questdb.jar io.questdb.cutlass.auth.AuthUtils \
+  generate-key-pair
+
+# Output:
+# Private key: uy2B...
+# Public key: Bpz3...
+```
+
+**Client authentication**:
+```python
+from questdb.ingress import Sender
+
+with Sender('localhost', 9009, auth=(
+    'alice',                    # Username
+    'Bpz3...',                 # Challenge public key
+    'uy2B...'                  # Private key
+)) as sender:
+    sender.row('trades', symbols={'symbol': 'BTC'}, columns={'price': 50000})
+    sender.flush()
+```
+
+## Authorization (Enterprise)
+
+### Access Control Lists (ACL)
+
+Fine-grained permissions for users and groups:
+
+```properties
+# server.conf
+
+# Enable ACL
+acl.enabled=true
+
+# Admin user (full permissions)
+acl.admin.user.enabled=true
+acl.admin.user=admin
+acl.admin.password=admin_pass
+```
+
+### User Management
+
+**Create users** (Enterprise SQL):
+```sql
+-- Create user
+CREATE USER alice WITH PASSWORD 'alice_pass';
+
+-- Grant permissions
+GRANT SELECT ON trades TO alice;
+GRANT INSERT ON trades TO alice;
+
+-- Revoke permissions
+REVOKE INSERT ON trades FROM alice;
+
+-- Drop user
+DROP USER alice;
+```
+
+### Role-Based Access Control
+
+```sql
+-- Create role
+CREATE ROLE analysts;
+
+-- Grant permissions to role
+GRANT SELECT ON trades TO analysts;
+GRANT SELECT ON quotes TO analysts;
+
+-- Assign role to users
+GRANT ROLE analysts TO alice;
+GRANT ROLE analysts TO bob;
+
+-- Revoke role
+REVOKE ROLE analysts FROM alice;
+```
+
+### Permission Types
+
+- **SELECT**: Read data from tables
+- **INSERT**: Insert data into tables
+- **UPDATE**: Update existing data (via ALTER TABLE)
+- **DELETE**: Drop partitions
+- **CREATE**: Create tables and schemas
+- **ALTER**: Modify table structure
+- **DROP**: Drop tables
+- **ALL**: All permissions
+
+### Table-Level Permissions
+
+```sql
+-- Grant specific permissions
+GRANT SELECT, INSERT ON trades TO alice;
+
+-- Grant all permissions on table
+GRANT ALL ON quotes TO alice;
+
+-- Grant permissions on all tables
+GRANT SELECT ON ALL TABLES TO alice;
+```
+
+### Column-Level Permissions (Enterprise)
+
+```sql
+-- Grant access to specific columns
+GRANT SELECT (timestamp, symbol, price) ON trades TO alice;
+
+-- Deny access to sensitive columns
+REVOKE SELECT (customer_id, email) ON trades FROM alice;
+```
+
+## TLS/SSL Encryption
+
+### Generate Certificates
+
+**Self-signed certificate** (development):
+```bash
+# Generate private key
+openssl genrsa -out questdb-key.pem 2048
+
+# Generate certificate signing request
+openssl req -new -key questdb-key.pem -out questdb-csr.pem \
+  -subj "/CN=localhost"
+
+# Generate self-signed certificate
+openssl x509 -req -in questdb-csr.pem \
+  -signkey questdb-key.pem \
+  -out questdb-cert.pem -days 365
+```
+
+**Certificate authority** (production):
+```bash
+# Use Let's Encrypt
+sudo certbot certonly --standalone -d questdb.example.com
+
+# Certificates at:
+# /etc/letsencrypt/live/questdb.example.com/fullchain.pem
+# /etc/letsencrypt/live/questdb.example.com/privkey.pem
+```
+
+### Global TLS Configuration
+
+```properties
+# server.conf
+
+# Enable TLS for all protocols
+tls.enabled=true
+tls.cert.path=/path/to/questdb-cert.pem
+tls.private.key.path=/path/to/questdb-key.pem
+```
+
+### Protocol-Specific TLS
+
+**HTTP/HTTPS**:
+```properties
+http.tls.enabled=true
+http.tls.cert.path=/path/to/http-cert.pem
+http.tls.private.key.path=/path/to/http-key.pem
+```
+
+Access via HTTPS:
+```bash
+curl -u admin:quest https://localhost:9000/
+```
+
+**PostgreSQL TLS**:
+```properties
+pg.tls.enabled=true
+pg.tls.cert.path=/path/to/pg-cert.pem
+pg.tls.private.key.path=/path/to/pg-key.pem
+```
+
+Connect with TLS:
+```bash
+psql "postgresql://admin:quest@localhost:8812/qdb?sslmode=require"
+```
+
+**ILP TCP TLS**:
+```properties
+line.tcp.tls.enabled=true
+line.tcp.tls.cert.path=/path/to/ilp-cert.pem
+line.tcp.tls.private.key.path=/path/to/ilp-key.pem
+```
+
+**HTTP MIN TLS** (separate health check endpoint):
+```properties
+http.min.tls.enabled=true
+http.min.tls.cert.path=/path/to/min-cert.pem
+http.min.tls.private.key.path=/path/to/min-key.pem
+```
+
+## Read-Only Mode
+
+Prevent all write operations:
+
+```properties
+# server.conf
+
+# Global read-only mode
+http.security.readonly=true
+pg.security.readonly=true
+```
+
+**Rejected operations**:
+- `INSERT`
+- `CREATE TABLE`
+- `ALTER TABLE`
+- `DROP TABLE`
+- `COPY`
+- ILP ingestion
+
+**Allowed operations**:
+- `SELECT`
+- `EXPLAIN`
+- System queries
+
+## Network Security
+
+### Bind to Specific Interfaces
+
+Restrict which network interfaces QuestDB listens on:
+
+```properties
+# server.conf
+
+# Bind HTTP to localhost only
+http.net.bind.to=127.0.0.1:9000
+
+# Bind PostgreSQL to private network
+pg.net.bind.to=10.0.1.10:8812
+
+# Bind ILP to all interfaces
+line.tcp.net.bind.to=0.0.0.0:9009
+```
+
+### Firewall Configuration
+
+**iptables** (Linux):
+```bash
+# Allow HTTP from specific subnet
+sudo iptables -A INPUT -p tcp --dport 9000 -s 10.0.0.0/24 -j ACCEPT
+sudo iptables -A INPUT -p tcp --dport 9000 -j DROP
+
+# Allow PostgreSQL from anywhere
+sudo iptables -A INPUT -p tcp --dport 8812 -j ACCEPT
+
+# Save rules
+sudo iptables-save > /etc/iptables/rules.v4
+```
+
+**ufw** (Ubuntu):
+```bash
+# Allow HTTP from specific IP
+sudo ufw allow from 10.0.0.100 to any port 9000
+
+# Allow PostgreSQL
+sudo ufw allow 8812/tcp
+
+# Enable firewall
+sudo ufw enable
+```
+
+### Connection Limits
+
+Prevent resource exhaustion:
+
+```properties
+# server.conf
+
+# HTTP connection limits
+http.net.connection.limit=256
+http.ilp.connection.limit=100
+http.json.query.connection.limit=150
+http.export.connection.limit=25
+
+# PostgreSQL connection limit
+pg.net.connection.limit=64
+
+# ILP TCP connection limit
+line.tcp.net.connection.limit=256
+```
+
+### Connection Timeouts
+
+```properties
+# HTTP idle timeout
+http.net.connection.timeout=5m
+http.net.connection.queue.timeout=5s
+
+# PostgreSQL idle timeout
+pg.net.connection.timeout=5m
+pg.net.connection.queue.timeout=5m
+
+# ILP TCP timeout (0 = no timeout)
+line.tcp.net.connection.timeout=0
+line.tcp.net.connection.queue.timeout=5s
+```
+
+## Data Security
+
+### Encryption at Rest
+
+QuestDB does not provide built-in encryption at rest. Use OS-level encryption:
+
+**LUKS** (Linux):
+```bash
+# Create encrypted volume
+sudo cryptsetup luksFormat /dev/sdb
+sudo cryptsetup open /dev/sdb questdb_encrypted
+
+# Create filesystem
+sudo mkfs.ext4 /dev/mapper/questdb_encrypted
+
+# Mount
+sudo mount /dev/mapper/questdb_encrypted /var/lib/questdb
+```
+
+**dm-crypt** (Linux):
+```bash
+# Encrypt partition
+sudo cryptsetup -y -v luksFormat /dev/sdb1
+sudo cryptsetup open /dev/sdb1 questdb_data
+sudo mkfs.ext4 /dev/mapper/questdb_data
+```
+
+**Cloud provider encryption**:
+- **AWS EBS**: Enable encryption on volume
+- **Azure Disk**: Enable encryption at rest
+- **GCP Persistent Disk**: Automatic encryption
+
+### Sensitive Data Handling
+
+**Avoid storing secrets in server.conf**:
+
+Use environment variables:
+```bash
+export QDB_PG_PASSWORD="$(cat /run/secrets/pg_password)"
+export QDB_HTTP_PASSWORD="$(cat /run/secrets/http_password)"
+```
+
+Reference in server.conf:
+```properties
+pg.password=${QDB_PG_PASSWORD}
+http.password=${QDB_HTTP_PASSWORD}
+```
+
+**Use secret files** (Enterprise):
+```properties
+# Reference file containing password
+http.password.file=/run/secrets/http_password
+pg.password.file=/run/secrets/pg_password
+```
+
+### Audit Logging (Enterprise)
+
+```properties
+# Enable audit logging
+audit.enabled=true
+audit.log.path=log/audit.log
+```
+
+Audit log captures:
+- User authentication attempts
+- Query execution (SELECT, INSERT, etc.)
+- Schema changes (CREATE, ALTER, DROP)
+- Permission changes (GRANT, REVOKE)
+
+## Security Best Practices
+
+### Production Checklist
+
+- [ ] Enable TLS for all protocols
+- [ ] Use strong passwords (20+ characters)
+- [ ] Enable HTTP Basic Authentication
+- [ ] Configure PostgreSQL authentication
+- [ ] Restrict network bindings
+- [ ] Configure firewall rules
+- [ ] Set connection limits
+- [ ] Enable read-only users for analytics
+- [ ] Use encryption at rest
+- [ ] Store secrets in secret management system
+- [ ] Enable audit logging (Enterprise)
+- [ ] Regularly rotate credentials
+- [ ] Monitor for unauthorized access attempts
+- [ ] Keep QuestDB updated
+
+### Password Policy
+
+**Strong passwords**:
+- Minimum 20 characters
+- Mix of uppercase, lowercase, numbers, symbols
+- No dictionary words
+- Unique per user/service
+
+**Rotation**:
+- Change passwords every 90 days
+- Immediately after suspected compromise
+- When employee leaves
+
+### Principle of Least Privilege
+
+1. **Default deny**: Start with no permissions
+2. **Grant minimum**: Only permissions needed
+3. **Use read-only**: For analytics and reporting
+4. **Separate roles**: Different users for different tasks
+5. **Review regularly**: Audit permissions quarterly
+
+### Network Segmentation
+
+**Recommended architecture**:
+
+```
+Internet
+    |
+[Load Balancer] -- TLS termination
+    |
+[Application Tier] -- 10.0.1.0/24
+    |
+[QuestDB] -- 10.0.2.0/24 (private subnet)
+    |
+[Backup Storage] -- 10.0.3.0/24 (isolated subnet)
+```
+
+- Expose only HTTP/HTTPS publicly
+- Keep PostgreSQL and ILP on private network
+- Isolate backup storage
+
+## Incident Response
+
+### Suspected Breach
+
+1. **Isolate**: Disconnect from network
+2. **Investigate**: Review audit logs
+3. **Contain**: Revoke compromised credentials
+4. **Remediate**: Patch vulnerabilities
+5. **Restore**: From clean backup if needed
+6. **Document**: Record timeline and actions
+
+### Password Reset
+
+```bash
+# Stop QuestDB
+systemctl stop questdb
+
+# Edit server.conf
+nano /var/lib/questdb/conf/server.conf
+
+# Update passwords
+http.password=new_secure_password
+pg.password=new_secure_password
+
+# Start QuestDB
+systemctl start questdb
+```
+
+### Revoke Access
+
+```sql
+-- Disable user (Enterprise)
+ALTER USER alice DISABLE;
+
+-- Drop user
+DROP USER alice;
+
+-- Revoke all permissions
+REVOKE ALL ON ALL TABLES FROM alice;
+```
+
+## Compliance
+
+### GDPR
+
+- **Right to erasure**: Use `ALTER TABLE DROP PARTITION` or filter exports
+- **Data minimization**: Only store necessary data
+- **Access controls**: Use ACL for fine-grained permissions
+- **Encryption**: Enable TLS and encryption at rest
+- **Audit logging**: Track data access
+
+### SOC 2
+
+- **Access control**: Implement ACL and authentication
+- **Encryption**: TLS in transit, disk encryption at rest
+- **Monitoring**: Enable metrics and alerting
+- **Backup**: Regular automated backups
+- **Audit**: Comprehensive audit logging
+
+### HIPAA
+
+- **Encryption**: Required for PHI
+- **Access controls**: Strict user permissions
+- **Audit logging**: Track all PHI access
+- **Backup and recovery**: Tested disaster recovery plan
+- **Data retention**: Implement TTL for old data
+
+## Security Updates
+
+**Stay informed**:
+- Subscribe to QuestDB security mailing list
+- Monitor GitHub releases
+- Review CVE databases
+
+**Update process**:
+1. Test updates in staging environment
+2. Schedule maintenance window
+3. Backup database
+4. Apply update
+5. Verify functionality
+6. Monitor for issues
+
+**Emergency patches**:
+- Apply immediately for critical vulnerabilities
+- Follow hotfix procedures
+- Document changes

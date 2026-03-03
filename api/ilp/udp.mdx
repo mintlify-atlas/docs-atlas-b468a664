@@ -1,0 +1,414 @@
+---
+title: ILP over UDP
+sidebarTitle: UDP
+description: Fire-and-forget UDP ingestion using InfluxDB Line Protocol for low-latency, high-throughput scenarios
+---
+
+QuestDB's ILP/UDP receiver provides fire-and-forget ingestion of time-series data over UDP datagrams. This method offers the lowest latency and overhead but does not guarantee message delivery.
+
+## Overview
+
+The UDP receiver listens on port **4567** by default and supports:
+
+- **Connectionless** - No TCP handshake or connection overhead
+- **Fire-and-forget** - Send data without waiting for acknowledgment
+- **Multicast support** - Send to multiple QuestDB instances simultaneously
+- **High throughput** - Minimal protocol overhead for maximum ingestion speed
+- **No authentication** - No built-in security (use network-level controls)
+
+<Warning>
+  UDP provides no delivery guarantees. Messages may be lost, duplicated, or arrive out of order. Use TCP for production workloads where data integrity is critical.
+</Warning>
+
+## Quick Start
+
+### Basic Ingestion
+
+Send ILP messages over UDP:
+
+```bash
+# Using netcat (nc)
+echo "sensors,location=london temperature=23.5,humidity=65.2 $(date +%s)000000000" | nc -u localhost 4567
+```
+
+```python
+# Using Python socket
+import socket
+import time
+
+sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+
+timestamp = int(time.time() * 1_000_000_000)  # nanoseconds
+message = f"sensors,location=london temperature=23.5,humidity=65.2 {timestamp}\n"
+sock.sendto(message.encode(), ('localhost', 4567))
+
+sock.close()
+```
+
+### Batch Ingestion
+
+Send multiple measurements in a single UDP datagram:
+
+```python
+import socket
+import time
+
+sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+
+# Build batch message (multiple lines)
+batch = []
+for i in range(100):
+    timestamp = int(time.time() * 1_000_000_000) + i * 1_000_000  # 1ms apart
+    line = f"sensors,sensor_id=sensor_{i%10} temperature={20 + i%10},humidity={60 + i%5} {timestamp}"
+    batch.append(line)
+
+message = '\n'.join(batch) + '\n'
+sock.sendto(message.encode(), ('localhost', 4567))
+
+sock.close()
+```
+
+<Note>
+  Keep UDP datagrams under the MTU size (typically 1500 bytes) to avoid fragmentation. Fragmented packets are more likely to be lost.
+</Note>
+
+## Protocol Details
+
+### Message Format
+
+UDP uses the same ILP text format as TCP:
+
+```
+table_name,tag1=value1,tag2=value2 field1=value1,field2=value2 timestamp
+```
+
+Example:
+
+```
+sensors,location=london,device=sensor_001 temperature=23.5,humidity=65.2 1609459200000000000
+```
+
+### Multiple Measurements
+
+Send multiple measurements in a single UDP datagram by separating them with newlines:
+
+```
+sensors,location=london temperature=23.5 1609459200000000000
+sensors,location=paris temperature=18.2 1609459201000000000
+sensors,location=berlin temperature=15.7 1609459202000000000
+```
+
+### Message Termination
+
+Each measurement must be terminated with a newline (`\n`):
+
+```python
+# Correct: single measurement with newline
+message = "sensors,location=london temperature=23.5 1609459200000000000\n"
+
+# Correct: multiple measurements, each with newline
+message = "sensors,location=london temperature=23.5 1609459200000000000\n" + \
+          "sensors,location=paris temperature=18.2 1609459201000000000\n"
+```
+
+## Unicast vs. Multicast
+
+### Unicast (Default)
+
+Send data to a single QuestDB instance:
+
+```python
+import socket
+
+sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+sock.sendto(message.encode(), ('localhost', 4567))
+sock.close()
+```
+
+### Multicast
+
+Send data to multiple QuestDB instances using multicast:
+
+```python
+import socket
+import struct
+
+MULTICAST_GROUP = '224.1.1.1'
+MULTICAST_PORT = 4567
+
+sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
+sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 2)
+
+message = "sensors,location=london temperature=23.5 1609459200000000000\n"
+sock.sendto(message.encode(), (MULTICAST_GROUP, MULTICAST_PORT))
+
+sock.close()
+```
+
+**Server Configuration for Multicast:**
+
+```properties
+line.udp.unicast=false
+line.udp.bind.to=0.0.0.0:4567
+line.udp.join=224.1.1.1
+```
+
+## Performance Characteristics
+
+### Advantages
+
+<Check>**Lowest latency** - No connection setup or acknowledgment delays</Check>
+<Check>**Minimal overhead** - No TCP handshake, retransmission, or flow control</Check>
+<Check>**High throughput** - Can saturate network bandwidth efficiently</Check>
+<Check>**No back-pressure** - Client never blocks waiting for server</Check>
+
+### Limitations
+
+<Warning>**No delivery guarantee** - Messages may be lost due to network congestion or errors</Warning>
+<Warning>**No error feedback** - Client has no way to know if data was rejected</Warning>
+<Warning>**No ordering guarantee** - Messages may arrive out of order</Warning>
+<Warning>**No authentication** - Anyone who can reach the port can write data</Warning>
+<Warning>**Size limitations** - UDP datagrams exceeding MTU may be fragmented or dropped</Warning>
+
+## Error Handling
+
+Unlike TCP, UDP provides no error feedback. Invalid messages are silently dropped.
+
+### Best Practices
+
+<Tip>
+  **Test messages** - Validate ILP message format using TCP before switching to UDP.
+</Tip>
+
+<Tip>
+  **Monitor ingestion** - Query QuestDB regularly to verify data is being received.
+</Tip>
+
+<Tip>
+  **Keep messages small** - Stay under 1400 bytes per datagram to avoid fragmentation.
+</Tip>
+
+<Tip>
+  **Use UDP for telemetry** - Ideal for metrics, sensors, and logs where occasional data loss is acceptable.
+</Tip>
+
+<Warning>
+  **Avoid UDP for critical data** - Use TCP for financial data, transactions, or any data that must not be lost.
+</Warning>
+
+## Configuration
+
+UDP receiver configuration is set in `server.conf`:
+
+```properties
+# Enable/disable ILP over UDP
+line.udp.enabled=true
+
+# UDP listener configuration
+line.udp.bind.to=0.0.0.0:4567
+
+# Multicast configuration
+line.udp.unicast=true
+line.udp.join=224.1.1.1
+
+# Buffer configuration
+line.udp.msg.buffer.size=2048
+line.udp.msg.count=10000
+line.udp.receive.buffer.size=-1
+
+# Commit configuration
+line.udp.commit.rate=1048576
+line.udp.commit.mode=nosync
+
+# Schema configuration
+line.udp.auto.create.new.tables=true
+line.udp.auto.create.new.columns=true
+line.udp.default.partition.by=DAY
+
+# Data type defaults
+line.udp.default.column.type.integer=LONG
+line.udp.default.column.type.float=DOUBLE
+line.udp.timestamp.unit=nanos
+
+# Threading
+line.udp.own.thread=true
+line.udp.own.thread.affinity=-1
+```
+
+### Configuration Properties
+
+<ResponseField name="line.udp.enabled" type="boolean" default="true">
+  Enable or disable the ILP/UDP receiver.
+</ResponseField>
+
+<ResponseField name="line.udp.bind.to" type="string" default="0.0.0.0:4567">
+  Network interface and port to bind. Use `0.0.0.0` for all interfaces.
+</ResponseField>
+
+<ResponseField name="line.udp.unicast" type="boolean" default="true">
+  Use unicast mode. Set to `false` for multicast.
+</ResponseField>
+
+<ResponseField name="line.udp.join" type="string" default="224.1.1.1">
+  Multicast group address. Only used when `line.udp.unicast=false`.
+</ResponseField>
+
+<ResponseField name="line.udp.msg.buffer.size" type="integer" default="2048">
+  Size of the buffer for each UDP message. Increase for larger messages.
+</ResponseField>
+
+<ResponseField name="line.udp.msg.count" type="integer" default="10000">
+  Number of messages to buffer before committing. Higher values increase throughput but delay commits.
+</ResponseField>
+
+<ResponseField name="line.udp.receive.buffer.size" type="integer" default="-1">
+  OS-level UDP receive buffer size. `-1` uses OS default.
+</ResponseField>
+
+<ResponseField name="line.udp.commit.rate" type="integer" default="1048576">
+  Commit data after this many rows. Larger values increase throughput.
+</ResponseField>
+
+<ResponseField name="line.udp.commit.mode" type="string" default="nosync">
+  Commit mode: `nosync` (fastest), `async`, or `sync` (safest).
+</ResponseField>
+
+<ResponseField name="line.udp.auto.create.new.tables" type="boolean" default="true">
+  Automatically create tables from ILP messages. If false, tables must be pre-created.
+</ResponseField>
+
+<ResponseField name="line.udp.auto.create.new.columns" type="boolean" default="true">
+  Automatically add columns to existing tables. If false, messages with unknown columns are dropped.
+</ResponseField>
+
+<ResponseField name="line.udp.default.partition.by" type="string" default="DAY">
+  Default partitioning strategy for auto-created tables: `NONE`, `DAY`, `WEEK`, `MONTH`, `YEAR`.
+</ResponseField>
+
+<ResponseField name="line.udp.timestamp.unit" type="string" default="nanos">
+  Default timestamp unit when no suffix is provided: `nanos`, `micros`, `millis`.
+</ResponseField>
+
+<ResponseField name="line.udp.own.thread" type="boolean" default="true">
+  Run UDP receiver on a dedicated thread. Improves performance on multi-core systems.
+</ResponseField>
+
+<ResponseField name="line.udp.own.thread.affinity" type="integer" default="-1">
+  CPU core affinity for UDP receiver thread. `-1` for no affinity.
+</ResponseField>
+
+## Use Cases
+
+### High-Frequency Telemetry
+
+UDP is ideal for high-frequency sensor data where occasional loss is acceptable:
+
+```python
+import socket
+import time
+import random
+
+sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+
+# Send 10,000 sensor readings
+for i in range(10_000):
+    timestamp = int(time.time() * 1_000_000_000) + i * 100_000  # 100μs apart
+    temp = 20 + random.random() * 10
+    humidity = 60 + random.random() * 20
+    
+    message = f"sensors,sensor_id=sensor_001 temperature={temp},humidity={humidity} {timestamp}\n"
+    sock.sendto(message.encode(), ('localhost', 4567))
+
+sock.close()
+```
+
+### Application Metrics
+
+Collect application performance metrics:
+
+```python
+import socket
+import time
+
+def send_metric(metric_name, value, tags=None):
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    
+    timestamp = int(time.time() * 1_000_000_000)
+    tag_str = ',' + ','.join(f"{k}={v}" for k, v in tags.items()) if tags else ''
+    message = f"{metric_name}{tag_str} value={value} {timestamp}\n"
+    
+    sock.sendto(message.encode(), ('localhost', 4567))
+    sock.close()
+
+# Usage
+send_metric('http.requests', 150, {'host': 'server1', 'status': '200'})
+send_metric('cpu.usage', 45.2, {'host': 'server1', 'core': '0'})
+```
+
+### IoT Sensor Networks
+
+Collect data from distributed IoT devices:
+
+```python
+import socket
+import time
+
+def report_sensor_reading(device_id, location, temperature, humidity):
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    
+    timestamp = int(time.time() * 1_000_000_000)
+    message = f"iot_sensors,device_id={device_id},location={location} " \
+              f"temperature={temperature},humidity={humidity} {timestamp}\n"
+    
+    sock.sendto(message.encode(), ('localhost', 4567))
+    sock.close()
+
+# Simulated sensor readings from multiple devices
+for device_id in range(100):
+    report_sensor_reading(
+        device_id=f"device_{device_id}",
+        location=f"zone_{device_id % 10}",
+        temperature=20 + (device_id % 15),
+        humidity=55 + (device_id % 20)
+    )
+```
+
+## Monitoring
+
+Since UDP provides no feedback, monitor ingestion through QuestDB:
+
+```sql
+-- Check row count
+SELECT count() FROM sensors;
+
+-- Check latest timestamp
+SELECT max(timestamp) FROM sensors;
+
+-- Monitor ingestion rate
+SELECT 
+    timestamp,
+    count() OVER (ORDER BY timestamp RANGE BETWEEN 1 SECOND PRECEDING AND CURRENT ROW) AS rows_per_second
+FROM sensors
+WHERE timestamp > now() - INTERVAL '1' MINUTE
+ORDER BY timestamp DESC;
+```
+
+## When to Use UDP
+
+<Check>**Telemetry and monitoring** - Metrics where 99% accuracy is acceptable</Check>
+<Check>**High-frequency sensors** - IoT devices sending frequent updates</Check>
+<Check>**Application logs** - Non-critical log data for observability</Check>
+<Check>**Network-constrained environments** - Minimal overhead important</Check>
+
+## When to Use TCP Instead
+
+<Warning>**Financial data** - Transactions, trades, orders require guaranteed delivery</Warning>
+<Warning>**Critical events** - Alarms, alerts, audit logs must not be lost</Warning>
+<Warning>**Authentication needed** - UDP has no built-in authentication</Warning>
+<Warning>**Error feedback required** - Application needs to know about rejected data</Warning>
+
+## Related Resources
+
+- [ILP Overview](/api/ilp/overview)
+- [ILP over TCP](/api/ilp/tcp)
+- [Client Libraries](/clients)

@@ -1,0 +1,508 @@
+---
+title: SQL Extensions
+description: Time-series SQL extensions in QuestDB including SAMPLE BY, ASOF JOIN, LATEST ON, WINDOW JOIN, and HORIZON JOIN
+---
+
+QuestDB extends standard SQL with specialized constructs for time-series analysis. These extensions enable efficient operations that would be complex or impossible with standard SQL.
+
+## SAMPLE BY - Time-Based Aggregation
+
+`SAMPLE BY` performs downsampling by grouping data into time buckets and applying aggregate functions.
+
+### Basic Syntax
+
+```sql
+SELECT 
+    timestamp,
+    avg(price) as avg_price,
+    sum(volume) as total_volume
+FROM trades
+WHERE symbol = 'AAPL'
+SAMPLE BY 5m;  -- 5-minute buckets
+```
+
+### Time Units
+
+Supported units: `u` (microseconds), `T` (milliseconds), `s` (seconds), `m` (minutes), `h` (hours), `d` (days), `M` (months), `y` (years)
+
+```sql
+-- Various time intervals
+SAMPLE BY 1s   -- 1 second
+SAMPLE BY 15m  -- 15 minutes  
+SAMPLE BY 1h   -- 1 hour
+SAMPLE BY 1d   -- 1 day
+SAMPLE BY 1M   -- 1 month
+```
+
+### Fill Options
+
+Handle missing values in time buckets:
+
+```sql
+-- Fill with NULL (default)
+SAMPLE BY 1h;
+
+-- Fill with previous value
+SAMPLE BY 1h FILL(PREV);
+
+-- Fill with linear interpolation
+SAMPLE BY 1h FILL(LINEAR);
+
+-- Fill with constant value
+SAMPLE BY 1h FILL(100.0);
+
+-- Fill with zero
+SAMPLE BY 1h FILL(0);
+```
+
+### Alignment
+
+```sql
+-- Align to calendar boundaries (default)
+SAMPLE BY 1d ALIGN TO CALENDAR;
+
+-- Align to first observed timestamp
+SAMPLE BY 1d ALIGN TO FIRST OBSERVATION;
+```
+
+### Time Range Specification
+
+```sql
+-- Sample within specific time range
+SELECT timestamp, avg(temperature)
+FROM sensors
+SAMPLE BY 1h FROM '2024-03-01' TO '2024-03-31';
+```
+
+### Implementation Details
+
+SAMPLE BY is optimized through query rewriting:
+
+```java
+// From SqlOptimiser.java:7548
+/**
+ * Recursive. Replaces SAMPLE BY models with GROUP BY + ORDER BY. For now, the rewrite
+ */
+```
+
+The optimizer converts SAMPLE BY into efficient GROUP BY operations (source:core/src/main/java/io/questdb/griffin/SqlOptimiser.java:7548).
+
+### Use Case: OHLC Bars
+
+```sql
+SELECT 
+    timestamp,
+    first(price) as open,
+    max(price) as high,
+    min(price) as low,
+    last(price) as close,
+    sum(volume) as volume
+FROM trades
+WHERE symbol = 'BTC-USD'
+SAMPLE BY 1m;
+```
+
+## ASOF JOIN - Nearest Timestamp Match
+
+`ASOF JOIN` joins two tables by matching each row from the left table to the row in the right table with the closest preceding or equal timestamp.
+
+### Basic Syntax
+
+```sql
+SELECT 
+    t.timestamp,
+    t.symbol,
+    t.price,
+    q.bid,
+    q.ask
+FROM trades t
+ASOF JOIN quotes q
+ON t.symbol = q.symbol AND t.timestamp = q.timestamp;
+```
+
+### How ASOF JOIN Works
+
+For each trade, find the most recent quote at or before the trade timestamp:
+
+```
+Trades:                 Quotes:
+timestamp | price       timestamp | bid | ask
+10:00:00  | 100        10:00:00  | 99  | 101
+10:00:05  | 101        10:00:03  | 100 | 102
+10:00:10  | 102        10:00:08  | 101 | 103
+
+Result:
+timestamp | price | bid | ask
+10:00:00  | 100   | 99  | 101  ← exact match
+10:00:05  | 101   | 100 | 102  ← uses 10:00:03 quote
+10:00:10  | 102   | 101 | 103  ← uses 10:00:08 quote
+```
+
+### Keyed ASOF JOIN
+
+Join on multiple keys plus timestamp:
+
+```sql
+-- Match by symbol and nearest timestamp
+SELECT *
+FROM trades t
+ASOF JOIN quotes q
+ON t.symbol = q.symbol AND t.timestamp = q.timestamp;
+```
+
+### Timestamp-Only ASOF JOIN
+
+```sql
+-- Match only by timestamp (no key columns)
+SELECT *
+FROM sensor_a sa
+ASOF JOIN sensor_b sb
+ON sa.timestamp = sb.timestamp;
+```
+
+### ASOF JOIN with TOLERANCE
+
+Reject matches if the timestamp difference exceeds a threshold:
+
+```sql
+-- Only match quotes within 1 second
+SELECT *
+FROM trades t
+ASOF JOIN quotes q
+ON t.symbol = q.symbol AND t.timestamp = q.timestamp
+TOLERANCE 1s;
+```
+
+From the parser:
+
+```java
+// From SqlParser.java:3539-3555
+throw SqlException.$(lexer.lastTokenPosition(), "ASOF JOIN TOLERANCE period expected");
+// ...
+throw SqlException.$(lexer.lastTokenPosition(), "ASOF JOIN TOLERANCE must be positive");
+```
+
+TOLERANCE validation ensures positive constant values (source:core/src/main/java/io/questdb/griffin/SqlParser.java:3539-3555).
+
+### Implementation
+
+Multiple ASOF JOIN implementations optimize for different scenarios:
+
+```java
+// From AsOfJoinLightRecordCursorFactory.java:221
+// NOTE: unlike full fat ASOF JOIN, we don't evacuate joinKeyMap here.
+```
+
+Light ASOF JOIN optimizes memory usage (source:core/src/main/java/io/questdb/griffin/engine/join/AsOfJoinLightRecordCursorFactory.java:221).
+
+```java
+// From AsOfJoinDenseRecordCursorFactoryBase.java:48  
+/**
+ * Dense ASOF JOIN cursor is an improvement over the Light cursor for the case where
+ */
+```
+
+Dense variant optimizes for high match rates (source:core/src/main/java/io/questdb/griffin/engine/join/AsOfJoinDenseRecordCursorFactoryBase.java:48).
+
+## LATEST ON - Deduplication
+
+`LATEST ON` returns the most recent row for each unique key combination based on timestamp.
+
+### Basic Syntax
+
+```sql
+-- Get latest reading per sensor
+SELECT * FROM sensor_readings
+LATEST ON timestamp PARTITION BY sensor_id;
+```
+
+### Multiple Partition Keys
+
+```sql
+-- Latest price per symbol and exchange
+SELECT * FROM trades
+LATEST ON timestamp PARTITION BY symbol, exchange;
+```
+
+### Without Partition Keys
+
+```sql
+-- Get single most recent row
+SELECT * FROM events
+LATEST ON timestamp;
+```
+
+### Parser Reference
+
+```java
+// From WhereClauseParser.java:1018
+// Note: "preferred" is an unfortunate name, the actual meaning is a "column from a 'LATEST ON' clause".
+```
+
+Internal naming reflects timestamp column priority (source:core/src/main/java/io/questdb/griffin/WhereClauseParser.java:1018).
+
+### Use Case: Snapshot Queries
+
+```sql
+-- Current state of all IoT devices
+SELECT 
+    device_id,
+    timestamp,
+    status,
+    temperature,
+    battery_level
+FROM device_telemetry
+LATEST ON timestamp PARTITION BY device_id
+WHERE timestamp > dateadd('h', -1, now());  -- Active in last hour
+```
+
+## WINDOW JOIN - Range-Based Joins
+
+`WINDOW JOIN` matches rows from two tables where the right table's timestamp falls within a specified window relative to the left table's timestamp.
+
+### Basic Syntax
+
+```sql
+SELECT 
+    o.order_id,
+    o.timestamp as order_time,
+    s.timestamp as shipment_time
+FROM orders o
+WINDOW JOIN shipments s
+ON o.order_id = s.order_id
+AND s.timestamp BETWEEN o.timestamp AND dateadd('d', 7, o.timestamp);
+```
+
+### Time Window Specification
+
+```sql
+-- Events within 1 hour window
+SELECT *
+FROM base_events b
+WINDOW JOIN related_events r
+ON b.event_type = r.event_type
+AND r.timestamp BETWEEN b.timestamp AND dateadd('h', 1, b.timestamp);
+```
+
+### Implementation Variants
+
+Several factory implementations handle different optimization scenarios:
+
+```java
+// From WindowJoinRecordCursorFactory.java:66
+/**
+ * Single-threaded WINDOW JOIN factory for general join conditions.
+ */
+```
+
+Base implementation for general conditions (source:core/src/main/java/io/questdb/griffin/engine/join/WindowJoinRecordCursorFactory.java:66).
+
+```java
+// From WindowJoinFastRecordCursorFactory.java:75
+/**
+ * Single-threaded WINDOW JOIN factory with symbol-based join key optimization.
+ */
+```
+
+Fast variant optimizes symbol column joins (source:core/src/main/java/io/questdb/griffin/engine/join/WindowJoinFastRecordCursorFactory.java:75).
+
+Async versions enable parallel processing:
+
+```java
+// From AsyncWindowJoinRecordCursorFactory.java:78
+/**
+ * Multi-threaded WINDOW JOIN factory for general join conditions.
+ */
+```
+
+### Use Case: Event Correlation
+
+```sql
+-- Find all sensor errors that occurred within 5 minutes after an alert
+SELECT 
+    a.timestamp as alert_time,
+    a.alert_type,
+    e.timestamp as error_time,
+    e.error_code
+FROM alerts a
+WINDOW JOIN errors e
+ON a.sensor_id = e.sensor_id
+AND e.timestamp BETWEEN a.timestamp AND dateadd('m', 5, a.timestamp);
+```
+
+## HORIZON JOIN - Aggregation with Future Range Lookup
+
+`HORIZON JOIN` combines aggregation over future time ranges with ASOF JOIN lookups. It's designed for complex time-series analytics where you need to aggregate data in forward-looking windows.
+
+### Basic Syntax
+
+```sql
+SELECT 
+    master.timestamp,
+    master.id,
+    ranges.range_start,
+    sum(slave.value) as total
+FROM master_table master
+HORIZON JOIN (
+    SELECT 
+        timestamp as range_start,
+        dateadd('h', 1, timestamp) as range_end
+    FROM range_definitions
+) ranges ON master.timestamp = ranges.range_start
+ASOF JOIN slave_table slave ON master.id = slave.id
+GROUP BY master.id;
+```
+
+### Architecture
+
+HORIZON JOIN has a unique structure:
+
+1. **Master table**: Left-most table, drives the join
+2. **Horizon pseudo-table**: Defines time ranges (RANGE or LIST)
+3. **Slave table**: Right table, queried via ASOF JOIN within each horizon range
+4. **Aggregation**: GROUP BY semantics applied over horizon ranges
+
+```java
+// From SqlCodeGenerator.java:1064
+/**
+ * This model is created by the parser for HORIZON JOIN and represents the virtual
+ */
+```
+
+Synthetic offset model precedes HORIZON JOIN (source:core/src/main/java/io/questdb/griffin/SqlCodeGenerator.java:1064).
+
+### Keyed vs Non-Keyed
+
+**Keyed HORIZON JOIN** (with GROUP BY keys):
+
+```java
+// From HorizonJoinRecordCursorFactory.java:73
+/**
+ * Single-threaded factory for keyed HORIZON JOIN (GROUP BY with keys).
+ */
+```
+
+Keyed variant aggregates per group (source:core/src/main/java/io/questdb/griffin/engine/table/HorizonJoinRecordCursorFactory.java:73).
+
+**Non-keyed HORIZON JOIN** (single result row):
+
+```java
+// From HorizonJoinNotKeyedRecordCursorFactory.java:69
+/**
+ * Single-threaded factory for non-keyed HORIZON JOIN (single output row).
+ */
+```
+
+Non-keyed produces single aggregate (source:core/src/main/java/io/questdb/griffin/engine/table/HorizonJoinNotKeyedRecordCursorFactory.java:69).
+
+### ASOF JOIN Integration
+
+HORIZON JOIN internally uses ASOF JOIN:
+
+```java
+// From HorizonJoinRecord.java:47
+// - Slave record (from ASOF JOIN)
+```
+
+Slave records matched via ASOF JOIN (source:core/src/main/java/io/questdb/griffin/engine/table/HorizonJoinRecord.java:47).
+
+### Bidirectional Scanning
+
+```java
+// From HorizonJoinTimeFrameHelper.java:47
+// Also supports forward and backward scanning to build key-to-rowId maps for keyed ASOF JOIN.
+```
+
+Supports efficient key lookups in both directions (source:core/src/main/java/io/questdb/griffin/engine/table/HorizonJoinTimeFrameHelper.java:47).
+
+### Async Execution
+
+Parallel variants for performance:
+
+```java
+// From AsyncHorizonJoinRecordCursorFactory.java (multi-threaded keyed)
+// From AsyncHorizonJoinNotKeyedRecordCursorFactory.java (multi-threaded non-keyed)
+```
+
+### Validation Rules
+
+HORIZON JOIN has strict requirements:
+
+```java
+// From SqlOptimiser.java:7588-7592
+throw SqlException.$(sampleBy.position, "SAMPLE BY cannot be used with HORIZON JOIN");
+```
+
+Cannot combine with SAMPLE BY (source:core/src/main/java/io/questdb/griffin/SqlOptimiser.java:7588-7592).
+
+```java
+// From SqlOptimiser.java:8608-8612
+throw SqlException.$(baseModel.getGroupBy().getQuick(0).position, "GROUP BY cannot be used with WINDOW JOIN");
+```
+
+Exclusive with certain constructs (source:core/src/main/java/io/questdb/griffin/SqlOptimiser.java:8608-8612).
+
+### Use Case: Forward-Looking Analytics
+
+```sql
+-- For each trade, calculate volume in next 5 minutes
+SELECT 
+    t.timestamp,
+    t.symbol,
+    t.price,
+    sum(future.quantity) as next_5m_volume
+FROM trades t
+HORIZON JOIN (
+    SELECT 
+        timestamp as range_start,
+        dateadd('m', 5, timestamp) as range_end
+    FROM trades
+) ranges ON t.timestamp = ranges.range_start
+ASOF JOIN trades future ON t.symbol = future.symbol
+WHERE future.timestamp < ranges.range_end
+GROUP BY t.symbol;
+```
+
+## Performance Considerations
+
+### Index Requirements
+
+- ASOF JOIN performs best with timestamp indexes (automatically created)
+- SYMBOL columns enable bitmap indexing for faster joins
+- LATEST ON benefits from designated timestamp column
+
+### Parallelization
+
+Multi-threaded implementations exist for:
+- SAMPLE BY (via GROUP BY rewrite)
+- WINDOW JOIN (AsyncWindowJoin variants)
+- HORIZON JOIN (AsyncHorizonJoin variants)
+
+### Memory Usage
+
+- ASOF JOIN variants optimize for different memory profiles
+- WINDOW JOIN materializes matches within window
+- HORIZON JOIN requires memory for aggregation state
+
+## Combining Extensions
+
+```sql
+-- Combine multiple extensions
+SELECT 
+    timestamp,
+    symbol,
+    avg(price) as avg_price,
+    last(price) as last_price
+FROM (
+    SELECT * FROM trades
+    LATEST ON timestamp PARTITION BY symbol  -- Deduplicate first
+)
+WHERE timestamp > '2024-03-01'
+SAMPLE BY 1h;  -- Then aggregate
+```
+
+## See Also
+
+- [Time-Series Database](/concepts/time-series-database) - Core concepts
+- [Partitioning](/concepts/partitioning) - Time-based partitioning
+- [Storage Model](/concepts/storage-model) - Column-oriented storage

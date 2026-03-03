@@ -1,0 +1,434 @@
+---
+title: Date and Time Functions
+description: Functions for working with timestamps, dates, and time intervals in QuestDB
+---
+
+QuestDB provides comprehensive date and time functions with microsecond and nanosecond precision support.
+
+## Current Time Functions
+
+### now
+
+Returns the current timestamp. Evaluated once per query execution.
+
+**Signature:** `now()`
+
+**Returns:** `TIMESTAMP`
+
+**Example:**
+
+```sql
+SELECT now();
+-- Result: 2024-03-15T10:23:45.123456Z
+
+SELECT * FROM trades 
+WHERE timestamp > now() - INTERVAL '1' HOUR;
+```
+
+### systimestamp
+
+Alias for `now()`. Returns current timestamp with microsecond precision.
+
+**Signature:** `systimestamp()`
+
+**Returns:** `TIMESTAMP`
+
+### sysdate
+
+Returns current date (timestamp truncated to day).
+
+**Signature:** `sysdate()`
+
+**Returns:** `TIMESTAMP`
+
+**Example:**
+
+```sql
+SELECT sysdate();
+-- Result: 2024-03-15T00:00:00.000000Z
+```
+
+### today
+
+Returns current date at midnight.
+
+**Signature:** `today()`
+
+**Returns:** `TIMESTAMP`
+
+### yesterday
+
+Returns yesterday's date at midnight.
+
+**Signature:** `yesterday()`
+
+**Returns:** `TIMESTAMP`
+
+### tomorrow
+
+Returns tomorrow's date at midnight.
+
+**Signature:** `tomorrow()`
+
+**Returns:** `TIMESTAMP`
+
+## Date Part Extraction
+
+### year
+
+Extracts the year from a timestamp.
+
+**Signature:** `year(N)`
+
+**Parameters:**
+- `N` - TIMESTAMP
+
+**Returns:** `INT`
+
+**Example:**
+
+```sql
+SELECT year('2024-03-15T10:23:45.123456Z');
+-- Result: 2024
+
+SELECT year(timestamp) FROM trades;
+```
+
+### month
+
+Extracts the month (1-12) from a timestamp.
+
+**Signature:** `month(N)`
+
+**Parameters:**
+- `N` - TIMESTAMP
+
+**Returns:** `INT`
+
+**Example:**
+
+```sql
+SELECT month('2024-03-15T10:23:45.123456Z');
+-- Result: 3
+```
+
+### day
+
+Extracts the day of month (1-31) from a timestamp.
+
+**Signature:** `day(N)`
+
+**Parameters:**
+- `N` - TIMESTAMP
+
+**Returns:** `INT`
+
+### hour
+
+Extracts the hour (0-23) from a timestamp.
+
+**Signature:** `hour(N)`
+
+**Parameters:**
+- `N` - TIMESTAMP
+
+**Returns:** `INT`
+
+### minute
+
+Extracts the minute (0-59) from a timestamp.
+
+**Signature:** `minute(N)`
+
+**Parameters:**
+- `N` - TIMESTAMP
+
+**Returns:** `INT`
+
+### second
+
+Extracts the second (0-59) from a timestamp.
+
+**Signature:** `second(N)`
+
+**Parameters:**
+- `N` - TIMESTAMP
+
+**Returns:** `INT`
+
+### millis
+
+Extracts milliseconds (0-999) from a timestamp.
+
+**Signature:** `millis(N)`
+
+**Parameters:**
+- `N` - TIMESTAMP
+
+**Returns:** `INT`
+
+### micros
+
+Extracts microseconds (0-999) from a timestamp.
+
+**Signature:** `micros(N)`
+
+**Parameters:**
+- `N` - TIMESTAMP
+
+**Returns:** `INT`
+
+### day_of_week
+
+Returns day of week (1=Monday, 7=Sunday).
+
+**Signature:** `day_of_week(N)`
+
+**Parameters:**
+- `N` - TIMESTAMP
+
+**Returns:** `INT`
+
+**Example:**
+
+```sql
+SELECT day_of_week('2024-03-15T10:23:45.123456Z');
+-- Result: 5 (Friday)
+```
+
+### week_of_year
+
+Returns ISO week number (1-53).
+
+**Signature:** `week_of_year(N)`
+
+**Parameters:**
+- `N` - TIMESTAMP
+
+**Returns:** `INT`
+
+### is_leap_year
+
+Checks if year is a leap year.
+
+**Signature:** `is_leap_year(N)`
+
+**Parameters:**
+- `N` - TIMESTAMP
+
+**Returns:** `BOOLEAN`
+
+**Example:**
+
+```sql
+SELECT is_leap_year('2024-01-01T00:00:00.000000Z');
+-- Result: true
+```
+
+## Date Truncation
+
+### date_trunc
+
+Truncates timestamp to specified unit.
+
+**Signature:** `date_trunc(sN)`
+
+**Parameters:**
+- `s` - Unit: `'nanosecond'`, `'microsecond'`, `'millisecond'`, `'second'`, `'minute'`, `'hour'`, `'day'`, `'week'`, `'month'`, `'quarter'`, `'year'`, `'decade'`, `'century'`, `'millennium'`
+- `N` - TIMESTAMP
+
+**Returns:** `TIMESTAMP`
+
+**Example:**
+
+```sql
+SELECT date_trunc('hour', '2024-03-15T10:23:45.123456Z');
+-- Result: 2024-03-15T10:00:00.000000Z
+
+SELECT date_trunc('day', timestamp) FROM trades;
+
+-- Group by hour
+SELECT 
+    date_trunc('hour', timestamp) as hour,
+    count() as trade_count
+FROM trades
+GROUP BY hour;
+```
+
+### timestamp_floor
+
+Floors timestamp to interval boundary.
+
+**Signature:** `timestamp_floor(sN)`
+
+**Parameters:**
+- `s` - Interval (e.g., `'1h'`, `'5m'`, `'1d'`)
+- `N` - TIMESTAMP
+
+**Returns:** `TIMESTAMP`
+
+**Example:**
+
+```sql
+SELECT timestamp_floor('5m', '2024-03-15T10:23:45.123456Z');
+-- Result: 2024-03-15T10:20:00.000000Z
+```
+
+### timestamp_ceil
+
+Ceils timestamp to interval boundary.
+
+**Signature:** `timestamp_ceil(sN)`
+
+**Parameters:**
+- `s` - Interval
+- `N` - TIMESTAMP
+
+**Returns:** `TIMESTAMP`
+
+## Date Arithmetic
+
+### dateadd
+
+Adds interval to timestamp.
+
+**Signature:** `dateadd(sIN)` or `timestamp_add(sIN)`
+
+**Parameters:**
+- `s` - Unit: `'y'`, `'M'`, `'w'`, `'d'`, `'h'`, `'m'`, `'s'`, `'ms'`, `'us'`
+- `I` - Amount to add
+- `N` - TIMESTAMP
+
+**Returns:** `TIMESTAMP`
+
+**Example:**
+
+```sql
+SELECT dateadd('d', 7, '2024-03-15T10:23:45.123456Z');
+-- Result: 2024-03-22T10:23:45.123456Z
+
+SELECT dateadd('h', -1, now()) FROM trades;
+```
+
+### datediff
+
+Calculates difference between timestamps.
+
+**Signature:** `datediff(sNN)`
+
+**Parameters:**
+- `s` - Unit: `'y'`, `'M'`, `'w'`, `'d'`, `'h'`, `'m'`, `'s'`, `'ms'`, `'us'`
+- First `N` - Start TIMESTAMP
+- Second `N` - End TIMESTAMP
+
+**Returns:** `LONG`
+
+**Example:**
+
+```sql
+SELECT datediff('d', 
+    '2024-03-15T00:00:00.000000Z',
+    '2024-03-20T00:00:00.000000Z'
+);
+-- Result: 5
+
+SELECT datediff('h', first_trade, last_trade) FROM daily_summary;
+```
+
+## Type Conversion
+
+### to_timestamp
+
+Converts string or long to timestamp.
+
+**Signature:** `to_timestamp(S)` or `to_timestamp(L)`
+
+**Parameters:**
+- `S` - STRING in ISO format
+- `L` - LONG microseconds since epoch
+
+**Returns:** `TIMESTAMP`
+
+**Example:**
+
+```sql
+SELECT to_timestamp('2024-03-15T10:23:45.123456Z');
+SELECT to_timestamp(1710500625123456);
+```
+
+### to_str
+
+Formats timestamp as string.
+
+**Signature:** `to_str(Ns)`
+
+**Parameters:**
+- `N` - TIMESTAMP
+- `s` - Format pattern (Java DateTimeFormatter)
+
+**Returns:** `STRING`
+
+**Example:**
+
+```sql
+SELECT to_str(now(), 'yyyy-MM-dd HH:mm:ss');
+-- Result: 2024-03-15 10:23:45
+```
+
+## Time Series Generation
+
+### generate_series
+
+Generates series of timestamps.
+
+**Signature:** `generate_series(NNs)`
+
+**Parameters:**
+- First `N` - Start timestamp
+- Second `N` - End timestamp  
+- `s` - Step interval
+
+**Returns:** Table with `x` column
+
+**Example:**
+
+```sql
+SELECT * FROM generate_series(
+    '2024-03-15T00:00:00.000000Z',
+    '2024-03-15T23:59:59.999999Z',
+    '1h'
+);
+```
+
+## Intervals
+
+QuestDB supports interval literals:
+
+```sql
+INTERVAL '1' YEAR
+INTERVAL '3' MONTH
+INTERVAL '7' DAY
+INTERVAL '2' HOUR
+INTERVAL '30' MINUTE
+INTERVAL '45' SECOND
+```
+
+**Example:**
+
+```sql
+SELECT * FROM trades
+WHERE timestamp > now() - INTERVAL '1' HOUR;
+```
+
+## Performance Notes
+
+- Date extraction functions are highly optimized and vectorized
+- `date_trunc()` supports all precision levels without performance penalty
+- `now()` is evaluated once per query, not per row
+- Use native timestamp types instead of string parsing when possible
+
+## See Also
+
+- [TIMESTAMP Data Type](/reference/datatypes/#timestamp)
+- [SAMPLE BY](/reference/sql/sample-by/)
+- [Time Series Operations](/guides/time-series/)
