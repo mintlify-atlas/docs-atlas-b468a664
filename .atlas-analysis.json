@@ -1,0 +1,202 @@
+{
+  "projectType": "data-platform",
+  "projectName": "QuestDB",
+  "projectDescription": "High-performance, open-source time-series database with SQL support and low-latency ingestion",
+  "theme": "aspen",
+  "primaryColor": "#3a69a8",
+  "lightColor": "#5a89c8",
+  "darkColor": "#2a4978",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "installation"
+            ]
+          },
+          {
+            "group": "Core Concepts",
+            "pages": [
+              "concepts/time-series-database",
+              "concepts/storage-model",
+              "concepts/sql-extensions",
+              "concepts/partitioning",
+              "concepts/wal"
+            ]
+          },
+          {
+            "group": "Ingestion",
+            "pages": [
+              "ingestion/overview",
+              "ingestion/influxdb-line-protocol",
+              "ingestion/postgres-wire",
+              "ingestion/rest-api",
+              "ingestion/csv-import"
+            ]
+          },
+          {
+            "group": "SQL Guide",
+            "pages": [
+              "sql/overview",
+              "sql/select",
+              "sql/joins",
+              "sql/time-series-functions",
+              "sql/aggregations",
+              "sql/window-functions"
+            ]
+          },
+          {
+            "group": "Operations",
+            "pages": [
+              "operations/configuration",
+              "operations/capacity-planning",
+              "operations/backup-restore",
+              "operations/monitoring",
+              "operations/security"
+            ]
+          },
+          {
+            "group": "Deployment",
+            "pages": [
+              "deployment/docker",
+              "deployment/kubernetes",
+              "deployment/aws",
+              "deployment/gcp"
+            ]
+          },
+          {
+            "group": "Integrations",
+            "pages": [
+              "integrations/grafana",
+              "integrations/kafka",
+              "integrations/telegraf",
+              "integrations/pandas",
+              "integrations/flink"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Client Libraries",
+        "groups": [
+          {
+            "group": "Overview",
+            "pages": [
+              "clients/overview"
+            ]
+          },
+          {
+            "group": "Languages",
+            "pages": [
+              "clients/java",
+              "clients/python",
+              "clients/nodejs",
+              "clients/go",
+              "clients/rust",
+              "clients/c-cpp",
+              "clients/dotnet"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "REST API",
+            "pages": [
+              "api/rest/overview",
+              "api/rest/query",
+              "api/rest/import",
+              "api/rest/export"
+            ]
+          },
+          {
+            "group": "PostgreSQL Wire Protocol",
+            "pages": [
+              "api/postgres/overview",
+              "api/postgres/connection",
+              "api/postgres/queries"
+            ]
+          },
+          {
+            "group": "InfluxDB Line Protocol",
+            "pages": [
+              "api/ilp/overview",
+              "api/ilp/tcp",
+              "api/ilp/udp",
+              "api/ilp/authentication"
+            ]
+          },
+          {
+            "group": "SQL Functions",
+            "pages": [
+              "api/functions/overview",
+              "api/functions/date-time",
+              "api/functions/aggregation",
+              "api/functions/string",
+              "api/functions/numeric",
+              "api/functions/finance"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Development",
+        "groups": [
+          {
+            "group": "Contributing",
+            "pages": [
+              "development/contributing",
+              "development/building",
+              "development/testing",
+              "development/architecture"
+            ]
+          },
+          {
+            "group": "Internals",
+            "pages": [
+              "development/storage-engine",
+              "development/sql-compiler",
+              "development/simd-optimization",
+              "development/memory-management"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Low-latency, high-throughput time-series ingestion",
+    "SQL with time-series extensions (ASOF JOIN, SAMPLE BY, LATEST ON)",
+    "Column-oriented storage with SIMD acceleration",
+    "Multi-tier storage (WAL → native → Parquet)",
+    "PostgreSQL wire protocol and REST API",
+    "InfluxDB Line Protocol support",
+    "Web console for queries and visualization",
+    "Built-in finance functions and orderbook analytics"
+  ],
+  "publicApiSurface": [
+    "REST API: /exec (query), /imp (import), /exp (export)",
+    "PostgreSQL Wire Protocol (port 8812)",
+    "InfluxDB Line Protocol TCP (port 9009)",
+    "HTTP Server (port 9000)",
+    "Web Console UI",
+    "Java Client: io.questdb.client.Sender",
+    "Python Client: questdb.ingress.Sender",
+    "Node.js Client: Sender class",
+    "Go Client: questdb.LineSender",
+    "Rust Client: questdb::ingress::Sender",
+    "C/C++ Client: line_sender_*",
+    ".NET Client: LineTcpSender",
+    "SQL Functions: date/time, aggregation, string, numeric, finance, geo",
+    "TableWriter/TableReader (Java API)",
+    "CairoEngine (Java API)",
+    "SqlCompiler (Java API)"
+  ]
+}
