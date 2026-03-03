@@ -1,97 +1,98 @@
 ---
-title: "Introduction"
-description: "Welcome to the new home for your documentation"
+title: Introduction to QuestDB
+description: High-performance time-series database with blazingly fast ingestion and low-latency SQL queries
 ---
 
-## Setting up
+# Welcome to QuestDB
 
-Get your documentation site up and running in minutes.
+QuestDB is an open-source time-series database offering blazingly fast ingestion and dynamic, low-latency SQL queries. Built for performance, QuestDB delivers a multi-tier storage engine and achieves high performance via column-oriented storage, parallelized vector execution, SIMD instructions, and low-latency techniques.
 
-<Card
-  title="Start here"
-  icon="rocket"
-  href="/quickstart"
-  horizontal
->
-  Follow our three step quickstart guide.
-</Card>
+## Why QuestDB?
 
-## Make it yours
+QuestDB combines the familiarity of SQL with specialized time-series features, making it ideal for applications that demand both speed and flexibility.
 
-Design a docs site that looks great and empowers your users.
+### Key Features
 
-<Columns cols={2}>
-  <Card
-    title="Edit locally"
-    icon="pen-to-square"
-    href="/development"
-  >
-    Edit your docs locally and preview them in real time.
+<CardGroup cols={2}>
+  <Card title="High-Performance Ingestion" icon="bolt">
+    Low-latency, high-throughput ingestion from single events to millions per second
   </Card>
-  <Card
-    title="Customize your site"
-    icon="palette"
-    href="/essentials/settings"
-  >
-    Customize the design and colors of your site to match your brand.
+  
+  <Card title="Time-Series SQL Extensions" icon="clock">
+    Advanced SQL features like ASOF JOIN, WINDOW JOIN, HORIZON JOIN, SAMPLE BY, and LATEST ON
   </Card>
-    <Card
-    title="Set up navigation"
-    icon="map"
-    href="/essentials/navigation"
-  >
-    Organize your docs to help users find what they need and succeed with your product.
+  
+  <Card title="SIMD-Accelerated Execution" icon="gauge-high">
+    Parallel execution with SIMD acceleration for maximum query performance
   </Card>
-  <Card
-    title="API documentation"
-    icon="terminal"
-    href="/api-reference/introduction"
-  >
-    Auto-generate API documentation from OpenAPI specifications.
+  
+  <Card title="Multi-Tier Storage" icon="database">
+    Intelligent storage: WAL → native columnar → Parquet (time-partitioned and time-ordered)
   </Card>
-</Columns>
+  
+  <Card title="Multiple Protocols" icon="network-wired">
+    PostgreSQL wire protocol (PGwire), REST API, and InfluxDB Line Protocol (ILP)
+  </Card>
+  
+  <Card title="Open Source" icon="code-branch">
+    Apache 2.0 license with open formats—no vendor lock-in
+  </Card>
+</CardGroup>
 
-## Create beautiful pages
+### Ideal Use Cases
 
-Everything you need to create world-class documentation.
+QuestDB excels in demanding time-series workloads:
 
-<Columns cols={2}>
-  <Card
-    title="Write with MDX"
-    icon="pen-fancy"
-    href="/essentials/markdown"
-  >
-    Use MDX to style your docs pages.
-  </Card>
-  <Card
-    title="Code samples"
-    icon="code"
-    href="/essentials/code"
-  >
-    Add sample code to demonstrate how to use your product.
-  </Card>
-  <Card
-    title="Images"
-    icon="image"
-    href="/essentials/images"
-  >
-    Display images and other media.
-  </Card>
-  <Card
-    title="Reusable snippets"
-    icon="recycle"
-    href="/essentials/reusable-snippets"
-  >
-    Write once and reuse across your docs.
-  </Card>
-</Columns>
+- **Financial market data** - Tick data, trades, order books, OHLC
+- **Sensor and telemetry data** - High cardinality data streams from IoT devices
+- **Real-time dashboards** - Live monitoring and analytics with continuous streaming
 
-## Need inspiration?
+### Beyond Performance
 
-<Card
-  title="See complete examples"
-  icon="stars"
-  href="https://mintlify.com/customers"
->
-  Browse our showcase of exceptional documentation sites.
-</Card>
+With QuestDB, you don't need to worry about:
+
+- Out-of-order data handling
+- Deduplication and exactly-once semantics
+- Continuous streaming ingest with concurrent queries
+- Low-latency streaming data
+- Volatile and "bursty" data patterns
+- Schema changes on the fly while streaming data
+
+## Architecture Highlights
+
+QuestDB is implemented in zero-GC Java and C++, with QuestDB Enterprise including additional components in Rust. The core engine uses:
+
+- **Column-oriented storage** for optimal compression and vectorized operations
+- **Native C/C++ libraries** for performance-critical operations via JNI
+- **Zero-allocation data structures** on hot paths to avoid garbage collection overhead
+- **Time-partitioned storage** for efficient data lifecycle management
+
+## Getting Started
+
+<CardGroup cols={2}>
+  <Card title="Quick Start" icon="rocket" href="/quickstart">
+    Get QuestDB running in under 5 minutes with Docker
+  </Card>
+  
+  <Card title="Installation Guide" icon="download" href="/installation">
+    Install QuestDB using Docker, Homebrew, binaries, or build from source
+  </Card>
+  
+  <Card title="Ingestion Methods" icon="plug" href="/ingestion/overview">
+    Learn about ingestion clients and connection methods
+  </Card>
+  
+  <Card title="SQL Reference" icon="book" href="/sql/overview">
+    Explore QuestDB's SQL dialect and time-series extensions
+  </Card>
+</CardGroup>
+
+## Try QuestDB Now
+
+<Tip>
+  Try our [live public demo](https://demo.questdb.com/) with real datasets including crypto trades, FX order books, and 10 years of NYC taxi trips with 1.6 billion rows.
+</Tip>
+
+## Next Steps
+
+Ready to dive in? Head over to the [Quick Start guide](/quickstart) to get QuestDB running in minutes, or explore the [Installation guide](/installation) for detailed setup options.
